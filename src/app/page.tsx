@@ -1,103 +1,424 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import dynamic from "next/dynamic";
+import type {
+  ShapeData,
+  Point,
+  PolygonShape,
+  RectangleShape,
+  CircleShape,
+} from "@/types/drawing";
+import { v4 as uuidv4 } from "uuid"; // For unique IDs
+
+const KonvaElements = dynamic(() => import("@/components/konva-elements"), {
+  ssr: false,
+});
+
+export default function VideoFrameEditor() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [currentFrameImage, setCurrentFrameImage] = useState<string | null>(
+    null
+  );
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [currentFrameTime, setCurrentFrameTime] = useState(0);
+  const [videoDimensions, setVideoDimensions] = useState({
+    width: 0,
+    height: 0,
+  });
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [isLoadingVideo, setIsLoadingVideo] = useState(true);
+
+  // New state for drawing tool selection
+  const [drawingTool, setDrawingTool] = useState<
+    "polygon" | "rectangle" | "circle"
+  >("polygon");
+
+  // State to store all completed shapes for each frame
+  const [frameShapes, setFrameShapes] = useState<Map<number, ShapeData[]>>(
+    new Map()
+  );
+  // State for completed shapes of the currently displayed frame
+  const [currentFrameShapes, setCurrentFrameShapes] = useState<ShapeData[]>([]);
+
+  // Temporary states for drawing in progress
+  const [activePolygonPoints, setActivePolygonPoints] = useState<Point[]>([]); // For polygon being drawn
+  const [tempRectStartPoint, setTempRectStartPoint] = useState<Point | null>(
+    null
+  ); // First click for rectangle
+  const [tempCircleCenterPoint, setTempCircleCenterPoint] =
+    useState<Point | null>(null); // First click for circle
+
+  const FPS = 30; // Assuming 30 frames per second for navigation
+  const currentFrameNumber = Math.floor(currentFrameTime * FPS);
+
+  // Helper to save current frame's shapes to the map
+  const saveCurrentFrameShapes = useCallback(() => {
+    setFrameShapes((prevMap) => {
+      const newMap = new Map(prevMap);
+      // Combine active polygon with completed shapes before saving
+      const shapesToSave = [...currentFrameShapes];
+      if (activePolygonPoints.length > 0) {
+        shapesToSave.push({
+          id: uuidv4(),
+          type: "polygon",
+          points: activePolygonPoints,
+          isClosed: false, // Polygons are saved as open until explicitly closed
+        });
+      }
+      newMap.set(currentFrameNumber, shapesToSave);
+      return newMap;
+    });
+  }, [currentFrameNumber, currentFrameShapes, activePolygonPoints]);
+
+  // Effect to load shapes when the current frame number changes
+  useEffect(() => {
+    const savedShapes = frameShapes.get(currentFrameNumber);
+    setCurrentFrameShapes(savedShapes ? [...savedShapes] : []);
+    setActivePolygonPoints([]); // Clear active polygon when changing frames
+    setTempRectStartPoint(null); // Clear temp rect point
+    setTempCircleCenterPoint(null); // Clear temp circle point
+  }, [currentFrameNumber, frameShapes]); // Removed saveCurrentFrameShapes from dependencies
+
+  const drawFrameToCanvas = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (video && canvas) {
+      if (
+        video.readyState >= 2 /* HTMLMediaElement.HAVE_CURRENT_DATA */ &&
+        video.videoWidth > 0
+      ) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+          setCurrentFrameImage(canvas.toDataURL("image/png"));
+          setVideoDimensions({
+            width: video.videoWidth,
+            height: video.videoHeight,
+          });
+          setIsLoadingVideo(false);
+          console.log(
+            "Frame drawn to canvas. Dimensions:",
+            video.videoWidth,
+            video.videoHeight
+          );
+        }
+      } else {
+        console.log(
+          "Video not ready for drawing yet. ReadyState:",
+          video.readyState,
+          "Dimensions:",
+          video.videoWidth,
+          video.videoHeight
+        );
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) {
+      const handleLoadedMetadata = () => {
+        setVideoDuration(video.duration);
+        setCurrentFrameTime(0); // Start at the beginning
+        console.log("Video metadata loaded. Duration:", video.duration);
+      };
+
+      const handleLoadedData = () => {
+        console.log("Video loaded data. Attempting to draw initial frame.");
+        drawFrameToCanvas();
+      };
+
+      const handleSeeked = () => {
+        console.log("Video seeked. Drawing new frame.");
+        drawFrameToCanvas();
+      };
+
+      const handleError = (e: Event) => {
+        console.error("Video error:", video.error);
+        setIsLoadingVideo(false);
+      };
+
+      video.addEventListener("loadedmetadata", handleLoadedMetadata);
+      video.addEventListener("loadeddata", handleLoadedData);
+      video.addEventListener("seeked", handleSeeked);
+      video.addEventListener("error", handleError);
+
+      return () => {
+        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        video.removeEventListener("loadeddata", handleLoadedData);
+        video.removeEventListener("seeked", handleSeeked);
+        video.removeEventListener("error", handleError);
+      };
+    }
+  }, [drawFrameToCanvas]);
+
+  const handleSliderChange = (value: number[]) => {
+    const newTime = value[0];
+    if (videoRef.current) {
+      saveCurrentFrameShapes(); // Save current frame's shapes before changing frame
+      videoRef.current.currentTime = newTime;
+      setCurrentFrameTime(newTime);
+    }
+  };
+
+  const handleNextFrame = () => {
+    if (videoRef.current) {
+      saveCurrentFrameShapes(); // Save current frame's shapes before changing frame
+      const newTime = Math.min(videoDuration, currentFrameTime + 1 / FPS);
+      videoRef.current.currentTime = newTime;
+      setCurrentFrameTime(newTime);
+    }
+  };
+
+  const handlePrevFrame = () => {
+    if (videoRef.current) {
+      saveCurrentFrameShapes(); // Save current frame's shapes before changing frame
+      const newTime = Math.max(0, currentFrameTime - 1 / FPS);
+      videoRef.current.currentTime = newTime;
+      setCurrentFrameTime(newTime);
+    }
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleStageClick = (e: any) => {
+    if (!isDrawingMode) return;
+
+    const stage = e.target.getStage();
+    const pointerPosition = stage.getPointerPosition();
+    if (!pointerPosition) return;
+
+    const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
+
+    if (drawingTool === "polygon") {
+      setActivePolygonPoints((prevPoints) => [...prevPoints, newPoint]);
+    } else if (drawingTool === "rectangle") {
+      if (!tempRectStartPoint) {
+        setTempRectStartPoint(newPoint);
+      } else {
+        // Second click for rectangle
+        const x = Math.min(tempRectStartPoint.x, newPoint.x);
+        const y = Math.min(tempRectStartPoint.y, newPoint.y);
+        const width = Math.abs(tempRectStartPoint.x - newPoint.x);
+        const height = Math.abs(tempRectStartPoint.y - newPoint.y);
+
+        const newRect: RectangleShape = {
+          id: uuidv4(),
+          type: "rectangle",
+          x,
+          y,
+          width,
+          height,
+        };
+        setCurrentFrameShapes((prevShapes) => [...prevShapes, newRect]);
+        setTempRectStartPoint(null); // Clear temp point after completing shape
+        setTempCircleCenterPoint(null); // Clear second temp point used for rect end
+      }
+    } else if (drawingTool === "circle") {
+      if (!tempCircleCenterPoint) {
+        setTempCircleCenterPoint(newPoint);
+      } else {
+        // Second click for circle (defines a point on circumference)
+        const radius = Math.sqrt(
+          Math.pow(newPoint.x - tempCircleCenterPoint.x, 2) +
+            Math.pow(newPoint.y - tempCircleCenterPoint.y, 2)
+        );
+
+        const newCircle: CircleShape = {
+          id: uuidv4(),
+          type: "circle",
+          x: tempCircleCenterPoint.x,
+          y: tempCircleCenterPoint.y,
+          radius,
+        };
+        setCurrentFrameShapes((prevShapes) => [...prevShapes, newCircle]);
+        setTempCircleCenterPoint(null); // Clear temp point after completing shape
+        setTempRectStartPoint(null); // Clear second temp point used for circle circumference
+      }
+    }
+  };
+
+  const handleClearDrawing = () => {
+    setCurrentFrameShapes([]);
+    setActivePolygonPoints([]);
+    setTempRectStartPoint(null);
+    setTempCircleCenterPoint(null);
+  };
+
+  const handleClosePolygon = () => {
+    if (activePolygonPoints.length >= 3) {
+      // Need at least 3 points to close a polygon
+      const closedPolygon: PolygonShape = {
+        id: uuidv4(),
+        type: "polygon",
+        points: [...activePolygonPoints],
+        isClosed: true,
+      };
+      setCurrentFrameShapes((prevShapes) => [...prevShapes, closedPolygon]);
+      setActivePolygonPoints([]); // Clear active polygon after closing
+    }
+  };
+
+  // Reset temporary drawing states when tool changes
+  useEffect(() => {
+    setTempRectStartPoint(null);
+    setTempCircleCenterPoint(null);
+    // If switching from polygon, finalize it
+    if (activePolygonPoints.length > 0 && drawingTool !== "polygon") {
+      const finalizedPolygon: PolygonShape = {
+        id: uuidv4(),
+        type: "polygon",
+        points: [...activePolygonPoints],
+        isClosed: false, // Saved as open if not explicitly closed
+      };
+      setCurrentFrameShapes((prevShapes) => [...prevShapes, finalizedPolygon]);
+      setActivePolygonPoints([]);
+    }
+  }, [drawingTool, activePolygonPoints, setCurrentFrameShapes]); // Added activePolygonPoints and setCurrentFrameShapes to dependencies
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+      <Card className="w-full max-w-4xl shadow-lg">
+        <CardHeader>
+          <CardTitle>Video Frame Editor</CardTitle>
+          <p className="text-sm text-gray-500">
+            Load a video, navigate frame by frame, and draw polygons,
+            rectangles, or circles on the current frame.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex flex-col items-center space-y-4 h-max">
+            {/* Hidden video element used for frame extraction */}
+            <video
+              ref={videoRef}
+              src="/placeholder.mp4"
+              preload="auto"
+              muted
+              crossOrigin="anonymous"
+              className="hidden"
+            >
+              Your browser does not support the video tag.
+            </video>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+            {/* Canvas for drawing video frames */}
+            <canvas ref={canvasRef} className="hidden" />
+
+            {/* Konva Stage for displaying image and drawing */}
+            {isLoadingVideo ? (
+              <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
+                Loading video...
+              </div>
+            ) : currentFrameImage &&
+              videoDimensions.width > 0 &&
+              videoDimensions.height > 0 ? (
+              <div className="w-full h-max">
+                <KonvaElements
+                  width={videoDimensions.width}
+                  height={videoDimensions.height}
+                  currentFrameImage={currentFrameImage}
+                  currentFrameShapes={currentFrameShapes}
+                  activePolygonPoints={activePolygonPoints}
+                  tempRectStartPoint={tempRectStartPoint}
+                  tempCircleCenterPoint={tempCircleCenterPoint}
+                  onStageClick={handleStageClick}
+                />
+              </div>
+            ) : (
+              <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
+                Error loading video or video has no dimensions.
+              </div>
+            )}
+          </div>
+
+          {videoDuration > 0 && (
+            <div className="w-full space-y-4">
+              <div className="flex items-center gap-4">
+                <Label htmlFor="frame-slider" className="min-w-[80px]">
+                  Frame: {currentFrameNumber} /{" "}
+                  {Math.floor(videoDuration * FPS)}
+                </Label>
+                <Slider
+                  id="frame-slider"
+                  min={0}
+                  max={videoDuration}
+                  step={1 / FPS}
+                  value={[currentFrameTime]}
+                  onValueChange={handleSliderChange}
+                  className="flex-grow"
+                />
+              </div>
+              <div className="flex justify-center gap-2">
+                <Button
+                  onClick={handlePrevFrame}
+                  disabled={currentFrameTime <= 0}
+                >
+                  Previous Frame
+                </Button>
+                <Button
+                  onClick={handleNextFrame}
+                  disabled={currentFrameTime >= videoDuration}
+                >
+                  Next Frame
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row justify-center gap-4">
+            <Button
+              onClick={() => setIsDrawingMode(!isDrawingMode)}
+              variant={isDrawingMode ? "destructive" : "default"}
+            >
+              {isDrawingMode ? "Disable Drawing" : "Enable Drawing"}
+            </Button>
+            <Button
+              onClick={handleClearDrawing}
+              disabled={
+                currentFrameShapes.length === 0 &&
+                activePolygonPoints.length === 0
+              }
+            >
+              Clear Drawing
+            </Button>
+            <Button
+              onClick={handleClosePolygon}
+              disabled={
+                drawingTool !== "polygon" || activePolygonPoints.length < 3
+              }
+            >
+              Close Polygon
+            </Button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row justify-center gap-2 mt-4">
+            <Button
+              onClick={() => setDrawingTool("polygon")}
+              variant={drawingTool === "polygon" ? "secondary" : "outline"}
+            >
+              Draw Polygon
+            </Button>
+            <Button
+              onClick={() => setDrawingTool("rectangle")}
+              variant={drawingTool === "rectangle" ? "secondary" : "outline"}
+            >
+              Draw Rectangle
+            </Button>
+            <Button
+              onClick={() => setDrawingTool("circle")}
+              variant={drawingTool === "circle" ? "secondary" : "outline"}
+            >
+              Draw Circle
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
