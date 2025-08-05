@@ -29,6 +29,7 @@ export default function VideoFrameEditor() {
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false); // New state for video playback
+  const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0); // New state for playback rate
 
   // New state for drawing tool selection
   const [drawingTool, setDrawingTool] = useState<
@@ -60,7 +61,7 @@ export default function VideoFrameEditor() {
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null); // Current mouse position for dynamic preview
 
-  const FPS = 3; // Assuming 30 frames per second for navigation
+  const FPS = 30; // Assuming 30 frames per second for navigation
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
 
   // Function to add a snapshot of currentFrameShapes to history
@@ -193,20 +194,20 @@ export default function VideoFrameEditor() {
     animationFrameId.current = requestAnimationFrame(animate);
   }, [isPlaying, drawFrameToCanvas, FPS]);
 
-  // Effect to start/stop the animation loop
+  // Effect to start/stop the animation loop and apply playback rate
   useEffect(() => {
-    if (isPlaying) {
-      if (videoRef.current) {
-        videoRef.current.play();
-      }
-      animationFrameId.current = requestAnimationFrame(animate);
-    } else {
-      if (videoRef.current) {
-        videoRef.current.pause();
-      }
-      if (animationFrameId.current) {
-        cancelAnimationFrame(animationFrameId.current);
-        animationFrameId.current = null;
+    const video = videoRef.current;
+    if (video) {
+      video.playbackRate = videoPlaybackRate; // Apply playback rate
+      if (isPlaying) {
+        video.play();
+        animationFrameId.current = requestAnimationFrame(animate);
+      } else {
+        video.pause();
+        if (animationFrameId.current) {
+          cancelAnimationFrame(animationFrameId.current);
+          animationFrameId.current = null;
+        }
       }
     }
     // Cleanup on unmount
@@ -215,7 +216,7 @@ export default function VideoFrameEditor() {
         cancelAnimationFrame(animationFrameId.current);
       }
     };
-  }, [isPlaying, animate]);
+  }, [isPlaying, animate, videoPlaybackRate]); // Added videoPlaybackRate to dependencies
 
   // New: Handle video ending
   const handleEnded = useCallback(() => {
@@ -267,10 +268,6 @@ export default function VideoFrameEditor() {
       video.addEventListener("seeked", handleSeeked);
       video.addEventListener("error", handleError);
       video.addEventListener("ended", handleEnded); // New listener
-
-      // Remove the timeupdate listener as requestAnimationFrame will handle frame updates
-      // video.removeEventListener("timeupdate", handleTimeUpdate); // This line is not needed if it was never added
-      // We will still use handleTimeUpdate for manual slider changes, but not as a video event listener.
 
       return () => {
         video.removeEventListener("loadedmetadata", handleLoadedMetadata);
@@ -619,6 +616,21 @@ export default function VideoFrameEditor() {
                 >
                   Next Frame
                 </Button>
+              </div>
+              <div className="flex items-center gap-4">
+                <Label htmlFor="playback-rate-slider" className="min-w-[120px]">
+                  Playback Speed: {videoPlaybackRate.toFixed(1)}x
+                </Label>
+                <Slider
+                  id="playback-rate-slider"
+                  min={0.1}
+                  max={1.0}
+                  step={0.1}
+                  value={[videoPlaybackRate]}
+                  onValueChange={(value) => setVideoPlaybackRate(value[0])}
+                  className="flex-grow"
+                  disabled={isPlaying} // Optionally disable during playback if you want to prevent changes mid-play
+                />
               </div>
             </div>
           )}
