@@ -6,13 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import dynamic from "next/dynamic";
-import type {
-  ShapeData,
-  Point,
-  PolygonShape,
-  RectangleShape,
-  CircleShape,
-} from "@/types/drawing";
+import type { ShapeData, Point, PolygonShape } from "@/types/drawing";
 import { v4 as uuidv4 } from "uuid"; // For unique IDs
 
 const KonvaElements = dynamic(() => import("@/components/konva-elements"), {
@@ -48,11 +42,16 @@ export default function VideoFrameEditor() {
 
   // Temporary states for drawing in progress
   const [activePolygonPoints, setActivePolygonPoints] = useState<Point[]>([]); // For polygon being drawn
-  const [tempRectStartPoint, setTempRectStartPoint] = useState<Point | null>(
+  const [activePolygonHistory, setActivePolygonHistory] = useState<Point[][]>([
+    [],
+  ]); // History for undo/redo
+  const [activePolygonHistoryIndex, setActivePolygonHistoryIndex] = useState(0); // Current index in history
+
+  const [tempShapeStartPoint, setTempShapeStartPoint] = useState<Point | null>(
     null
-  ); // First click for rectangle
-  const [tempCircleCenterPoint, setTempCircleCenterPoint] =
-    useState<Point | null>(null); // First click for circle
+  ); // First click for rectangle/circle
+  const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
+    useState<Point | null>(null); // Current mouse position for dynamic preview
 
   const FPS = 30; // Assuming 30 frames per second for navigation
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
@@ -81,9 +80,11 @@ export default function VideoFrameEditor() {
     const savedShapes = frameShapes.get(currentFrameNumber);
     setCurrentFrameShapes(savedShapes ? [...savedShapes] : []);
     setActivePolygonPoints([]); // Clear active polygon when changing frames
-    setTempRectStartPoint(null); // Clear temp rect point
-    setTempCircleCenterPoint(null); // Clear temp circle point
-  }, [currentFrameNumber, frameShapes]); // Removed saveCurrentFrameShapes from dependencies
+    setActivePolygonHistory([[]]); // Reset history
+    setActivePolygonHistoryIndex(0); // Reset history index
+    setTempShapeStartPoint(null); // Clear temp shape points
+    setTempShapeCurrentPoint(null); // Clear temp shape points
+  }, [currentFrameNumber, frameShapes]);
 
   const drawFrameToCanvas = useCallback(() => {
     const video = videoRef.current;
@@ -198,58 +199,96 @@ export default function VideoFrameEditor() {
     const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
 
     if (drawingTool === "polygon") {
-      setActivePolygonPoints((prevPoints) => [...prevPoints, newPoint]);
-    } else if (drawingTool === "rectangle") {
-      if (!tempRectStartPoint) {
-        setTempRectStartPoint(newPoint);
+      const newPoints = [...activePolygonPoints, newPoint];
+      const newHistory = activePolygonHistory.slice(
+        0,
+        activePolygonHistoryIndex + 1
+      );
+      newHistory.push(newPoints);
+      setActivePolygonHistory(newHistory);
+      setActivePolygonHistoryIndex(newHistory.length - 1);
+      setActivePolygonPoints(newPoints);
+    } else if (drawingTool === "rectangle" || drawingTool === "circle") {
+      if (!tempShapeStartPoint) {
+        setTempShapeStartPoint(newPoint);
+        setTempShapeCurrentPoint(newPoint); // Initialize current point for preview
       } else {
-        // Second click for rectangle
-        const x = Math.min(tempRectStartPoint.x, newPoint.x);
-        const y = Math.min(tempRectStartPoint.y, newPoint.y);
-        const width = Math.abs(tempRectStartPoint.x - newPoint.x);
-        const height = Math.abs(tempRectStartPoint.y - newPoint.y);
-
-        const newRect: RectangleShape = {
-          id: uuidv4(),
-          type: "rectangle",
-          x,
-          y,
-          width,
-          height,
-        };
-        setCurrentFrameShapes((prevShapes) => [...prevShapes, newRect]);
-        setTempRectStartPoint(null); // Clear temp point after completing shape
-        setTempCircleCenterPoint(null); // Clear second temp point used for rect end
+        // Second click for rectangle/circle
+        let newShape: ShapeData | null = null;
+        if (drawingTool === "rectangle") {
+          const x = Math.min(tempShapeStartPoint.x, newPoint.x);
+          const y = Math.min(tempShapeStartPoint.y, newPoint.y);
+          const width = Math.abs(tempShapeStartPoint.x - newPoint.x);
+          const height = Math.abs(tempShapeStartPoint.y - newPoint.y);
+          newShape = {
+            id: uuidv4(),
+            type: "rectangle",
+            x,
+            y,
+            width,
+            height,
+          };
+        } else if (drawingTool === "circle") {
+          const radius = Math.sqrt(
+            Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
+              Math.pow(newPoint.y - tempShapeStartPoint.y, 2)
+          );
+          newShape = {
+            id: uuidv4(),
+            type: "circle",
+            x: tempShapeStartPoint.x,
+            y: tempShapeStartPoint.y,
+            radius,
+          };
+        }
+        if (newShape) {
+          setCurrentFrameShapes((prevShapes) => [...prevShapes, newShape!]);
+        }
+        setTempShapeStartPoint(null); // Clear temp points after completing shape
+        setTempShapeCurrentPoint(null);
       }
-    } else if (drawingTool === "circle") {
-      if (!tempCircleCenterPoint) {
-        setTempCircleCenterPoint(newPoint);
-      } else {
-        // Second click for circle (defines a point on circumference)
-        const radius = Math.sqrt(
-          Math.pow(newPoint.x - tempCircleCenterPoint.x, 2) +
-            Math.pow(newPoint.y - tempCircleCenterPoint.y, 2)
-        );
+    }
+  };
 
-        const newCircle: CircleShape = {
-          id: uuidv4(),
-          type: "circle",
-          x: tempCircleCenterPoint.x,
-          y: tempCircleCenterPoint.y,
-          radius,
-        };
-        setCurrentFrameShapes((prevShapes) => [...prevShapes, newCircle]);
-        setTempCircleCenterPoint(null); // Clear temp point after completing shape
-        setTempRectStartPoint(null); // Clear second temp point used for circle circumference
-      }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleStageMouseMove = (e: any) => {
+    if (
+      !isDrawingMode ||
+      !tempShapeStartPoint ||
+      (drawingTool !== "rectangle" && drawingTool !== "circle")
+    )
+      return;
+
+    const stage = e.target.getStage();
+    const pointerPosition = stage.getPointerPosition();
+    if (pointerPosition) {
+      setTempShapeCurrentPoint({ x: pointerPosition.x, y: pointerPosition.y });
+    }
+  };
+
+  const handleUndoPolygon = () => {
+    if (activePolygonHistoryIndex > 0) {
+      const newIndex = activePolygonHistoryIndex - 1;
+      setActivePolygonHistoryIndex(newIndex);
+      setActivePolygonPoints(activePolygonHistory[newIndex]);
+    }
+  };
+
+  const handleRedoPolygon = () => {
+    if (activePolygonHistoryIndex < activePolygonHistory.length - 1) {
+      const newIndex = activePolygonHistoryIndex + 1;
+      setActivePolygonHistoryIndex(newIndex);
+      setActivePolygonPoints(activePolygonHistory[newIndex]);
     }
   };
 
   const handleClearDrawing = () => {
     setCurrentFrameShapes([]);
     setActivePolygonPoints([]);
-    setTempRectStartPoint(null);
-    setTempCircleCenterPoint(null);
+    setActivePolygonHistory([[]]); // Reset history
+    setActivePolygonHistoryIndex(0); // Reset history index
+    setTempShapeStartPoint(null);
+    setTempShapeCurrentPoint(null);
   };
 
   const handleClosePolygon = () => {
@@ -263,13 +302,15 @@ export default function VideoFrameEditor() {
       };
       setCurrentFrameShapes((prevShapes) => [...prevShapes, closedPolygon]);
       setActivePolygonPoints([]); // Clear active polygon after closing
+      setActivePolygonHistory([[]]); // Reset history
+      setActivePolygonHistoryIndex(0); // Reset history index
     }
   };
 
   // Reset temporary drawing states when tool changes
   useEffect(() => {
-    setTempRectStartPoint(null);
-    setTempCircleCenterPoint(null);
+    setTempShapeStartPoint(null);
+    setTempShapeCurrentPoint(null);
     // If switching from polygon, finalize it
     if (activePolygonPoints.length > 0 && drawingTool !== "polygon") {
       const finalizedPolygon: PolygonShape = {
@@ -280,8 +321,10 @@ export default function VideoFrameEditor() {
       };
       setCurrentFrameShapes((prevShapes) => [...prevShapes, finalizedPolygon]);
       setActivePolygonPoints([]);
+      setActivePolygonHistory([[]]); // Reset history
+      setActivePolygonHistoryIndex(0); // Reset history index
     }
-  }, [drawingTool, activePolygonPoints, setCurrentFrameShapes]); // Added activePolygonPoints and setCurrentFrameShapes to dependencies
+  }, [drawingTool, activePolygonPoints, setCurrentFrameShapes]);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
@@ -294,7 +337,7 @@ export default function VideoFrameEditor() {
           </p>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex flex-col items-center space-y-4 h-max">
+          <div className="flex flex-col items-center space-y-4">
             {/* Hidden video element used for frame extraction */}
             <video
               ref={videoRef}
@@ -318,18 +361,18 @@ export default function VideoFrameEditor() {
             ) : currentFrameImage &&
               videoDimensions.width > 0 &&
               videoDimensions.height > 0 ? (
-              <div className="w-full h-max">
-                <KonvaElements
-                  width={videoDimensions.width}
-                  height={videoDimensions.height}
-                  currentFrameImage={currentFrameImage}
-                  currentFrameShapes={currentFrameShapes}
-                  activePolygonPoints={activePolygonPoints}
-                  tempRectStartPoint={tempRectStartPoint}
-                  tempCircleCenterPoint={tempCircleCenterPoint}
-                  onStageClick={handleStageClick}
-                />
-              </div>
+              <KonvaElements
+                width={videoDimensions.width}
+                height={videoDimensions.height}
+                currentFrameImage={currentFrameImage}
+                currentFrameShapes={currentFrameShapes}
+                activePolygonPoints={activePolygonPoints}
+                tempShapeStartPoint={tempShapeStartPoint}
+                tempShapeCurrentPoint={tempShapeCurrentPoint}
+                drawingTool={drawingTool}
+                onStageClick={handleStageClick}
+                onStageMouseMove={handleStageMouseMove}
+              />
             ) : (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
                 Error loading video or video has no dimensions.
@@ -396,6 +439,25 @@ export default function VideoFrameEditor() {
               Close Polygon
             </Button>
           </div>
+
+          {drawingTool === "polygon" && (
+            <div className="flex justify-center gap-2 mt-2">
+              <Button
+                onClick={handleUndoPolygon}
+                disabled={activePolygonHistoryIndex === 0}
+              >
+                Undo Point
+              </Button>
+              <Button
+                onClick={handleRedoPolygon}
+                disabled={
+                  activePolygonHistoryIndex === activePolygonHistory.length - 1
+                }
+              >
+                Redo Point
+              </Button>
+            </div>
+          )}
 
           <div className="flex flex-col sm:flex-row justify-center gap-2 mt-4">
             <Button

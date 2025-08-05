@@ -17,9 +17,11 @@ interface KonvaElementsProps {
   currentFrameImage: string | null;
   currentFrameShapes: ShapeData[]; // Completed shapes for the current frame
   activePolygonPoints: Point[]; // Points for the polygon currently being drawn
-  tempRectStartPoint: Point | null; // First click for rectangle
-  tempCircleCenterPoint: Point | null; // First click for circle
+  tempShapeStartPoint: Point | null; // First click for rectangle/circle
+  tempShapeCurrentPoint: Point | null; // Current mouse position for dynamic preview
+  drawingTool: "polygon" | "rectangle" | "circle"; // New prop to help rendering temp shapes
   onStageClick: (e: KonvaEventObject<MouseEvent>) => void;
+  onStageMouseMove: (e: KonvaEventObject<MouseEvent>) => void; // New prop for mouse move
 }
 
 export default function KonvaElements({
@@ -28,9 +30,11 @@ export default function KonvaElements({
   currentFrameImage,
   currentFrameShapes,
   activePolygonPoints,
-  tempRectStartPoint,
-  tempCircleCenterPoint,
+  tempShapeStartPoint,
+  tempShapeCurrentPoint,
+  drawingTool,
   onStageClick,
+  onStageMouseMove,
 }: KonvaElementsProps) {
   if (!currentFrameImage || width === 0 || height === 0) {
     return (
@@ -45,31 +49,12 @@ export default function KonvaElements({
     return points.flatMap((p) => [p.x, p.y]);
   };
 
-  // Calculate temporary rectangle dimensions
-  const tempRect =
-    tempRectStartPoint && tempCircleCenterPoint // tempCircleCenterPoint is used as the second click for rect
-      ? {
-          x: Math.min(tempRectStartPoint.x, tempCircleCenterPoint.x),
-          y: Math.min(tempRectStartPoint.y, tempCircleCenterPoint.y),
-          width: Math.abs(tempRectStartPoint.x - tempCircleCenterPoint.x),
-          height: Math.abs(tempRectStartPoint.y - tempCircleCenterPoint.y),
-        }
-      : null;
-
-  // Calculate temporary circle radius
-  const tempCircleRadius =
-    tempCircleCenterPoint && tempRectStartPoint // tempRectStartPoint is used as the second click for circle
-      ? Math.sqrt(
-          Math.pow(tempRectStartPoint.x - tempCircleCenterPoint.x, 2) +
-            Math.pow(tempRectStartPoint.y - tempCircleCenterPoint.y, 2)
-        )
-      : 0;
-
   return (
     <Stage
       width={width}
       height={height}
       onMouseDown={onStageClick}
+      onMouseMove={onStageMouseMove} // Add mouse move handler
       className="border border-gray-300 rounded-lg overflow-hidden"
     >
       <Layer>
@@ -143,51 +128,47 @@ export default function KonvaElements({
           </>
         )}
 
-        {/* Render temporary rectangle */}
-        {tempRectStartPoint && tempCircleCenterPoint && tempRect && (
-          <Rect
-            x={tempRect.x}
-            y={tempRect.y}
-            width={tempRect.width}
-            height={tempRect.height}
-            stroke="green"
-            strokeWidth={2}
-            dash={[10, 5]} // Dashed line for temporary drawing
-          />
-        )}
-        {tempRectStartPoint && (
-          <Circle
-            x={tempRectStartPoint.x}
-            y={tempRectStartPoint.y}
-            radius={5}
-            fill="blue"
-            stroke="white"
-            strokeWidth={1}
-          />
-        )}
-
-        {/* Render temporary circle */}
-        {tempCircleCenterPoint &&
-          tempRectStartPoint &&
-          tempCircleRadius > 0 && (
+        {/* Render temporary rectangle/circle */}
+        {tempShapeStartPoint && tempShapeCurrentPoint && (
+          <>
+            {drawingTool === "rectangle" && (
+              <Rect
+                x={Math.min(tempShapeStartPoint.x, tempShapeCurrentPoint.x)}
+                y={Math.min(tempShapeStartPoint.y, tempShapeCurrentPoint.y)}
+                width={Math.abs(
+                  tempShapeStartPoint.x - tempShapeCurrentPoint.x
+                )}
+                height={Math.abs(
+                  tempShapeStartPoint.y - tempShapeCurrentPoint.y
+                )}
+                stroke="green"
+                strokeWidth={2}
+                dash={[10, 5]} // Dashed line for temporary drawing
+              />
+            )}
+            {drawingTool === "circle" && (
+              <Circle
+                x={tempShapeStartPoint.x}
+                y={tempShapeStartPoint.y}
+                radius={Math.sqrt(
+                  Math.pow(tempShapeCurrentPoint.x - tempShapeStartPoint.x, 2) +
+                    Math.pow(tempShapeCurrentPoint.y - tempShapeStartPoint.y, 2)
+                )}
+                stroke="blue"
+                strokeWidth={2}
+                dash={[10, 5]} // Dashed line for temporary drawing
+              />
+            )}
+            {/* Indicate the start point */}
             <Circle
-              x={tempCircleCenterPoint.x}
-              y={tempCircleCenterPoint.y}
-              radius={tempCircleRadius}
-              stroke="blue"
-              strokeWidth={2}
-              dash={[10, 5]} // Dashed line for temporary drawing
+              x={tempShapeStartPoint.x}
+              y={tempShapeStartPoint.y}
+              radius={5}
+              fill="blue"
+              stroke="white"
+              strokeWidth={1}
             />
-          )}
-        {tempCircleCenterPoint && (
-          <Circle
-            x={tempCircleCenterPoint.x}
-            y={tempCircleCenterPoint.y}
-            radius={5}
-            fill="blue"
-            stroke="white"
-            strokeWidth={1}
-          />
+          </>
         )}
       </Layer>
     </Stage>
