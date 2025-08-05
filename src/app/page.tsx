@@ -35,10 +35,6 @@ export default function VideoFrameEditor() {
     "polygon" | "rectangle" | "circle"
   >("polygon");
 
-  // State to store all completed shapes for each frame
-  const [frameShapes, setFrameShapes] = useState<Map<number, ShapeData[]>>(
-    new Map()
-  );
   // State for completed shapes of the currently displayed frame
   const [currentFrameShapes, setCurrentFrameShapes] = useState<ShapeData[]>([]);
 
@@ -64,27 +60,8 @@ export default function VideoFrameEditor() {
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null); // Current mouse position for dynamic preview
 
-  const FPS = 30; // Assuming 30 frames per second for navigation
+  const FPS = 3; // Assuming 30 frames per second for navigation
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
-
-  // Helper to save current frame's shapes to the map
-  const saveCurrentFrameShapes = useCallback(() => {
-    setFrameShapes((prevMap) => {
-      const newMap = new Map(prevMap);
-      // Combine active polygon with completed shapes before saving
-      const shapesToSave = [...currentFrameShapes];
-      if (activePolygonPoints.length > 0) {
-        shapesToSave.push({
-          id: uuidv4(),
-          type: "polygon",
-          points: activePolygonPoints,
-          isClosed: false, // Polygons are saved as open until explicitly closed
-        });
-      }
-      newMap.set(currentFrameNumber, shapesToSave);
-      return newMap;
-    });
-  }, [currentFrameNumber, currentFrameShapes, activePolygonPoints]);
 
   // Function to add a snapshot of currentFrameShapes to history
   const addFrameShapeSnapshot = useCallback(
@@ -112,21 +89,38 @@ export default function VideoFrameEditor() {
     [currentFrameNumber]
   );
 
-  // Effect to load shapes when the current frame number changes
+  // Helper to save current frame's shapes to the history
+  const saveCurrentFrameShapes = useCallback(() => {
+    // Combine active polygon with completed shapes before saving
+    const shapesToSave = [...currentFrameShapes];
+    if (activePolygonPoints.length > 0) {
+      shapesToSave.push({
+        id: uuidv4(),
+        type: "polygon",
+        points: activePolygonPoints,
+        isClosed: false, // Polygons are saved as open until explicitly closed
+      });
+    }
+    addFrameShapeSnapshot(shapesToSave); // Use the new snapshot function
+  }, [currentFrameShapes, activePolygonPoints, addFrameShapeSnapshot]);
+
+  // Effect to load shapes when the current frame number changes (manual navigation)
   useEffect(() => {
     const frameEntry = frameDrawingHistory.get(currentFrameNumber);
     if (frameEntry) {
       setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
     } else {
+      // If no history exists for this frame, initialize it with an empty state
+      // This ensures that when you manually navigate to a new frame, it has a history to record to.
       setCurrentFrameShapes([]);
-      // No need to call addFrameShapeSnapshot here. It will be called when the user draws something.
+      addFrameShapeSnapshot([]);
     }
     setActivePolygonPoints([]); // Clear active polygon when changing frames
     setActivePolygonHistory([[]]); // Reset history
     setActivePolygonHistoryIndex(0); // Reset history index
     setTempShapeStartPoint(null); // Clear temp shape points
     setTempShapeCurrentPoint(null); // Clear temp shape points
-  }, [currentFrameNumber, frameDrawingHistory]);
+  }, [currentFrameNumber, frameDrawingHistory, addFrameShapeSnapshot]);
 
   const drawFrameToCanvas = useCallback(() => {
     const video = videoRef.current;
@@ -161,23 +155,67 @@ export default function VideoFrameEditor() {
     }
   }, []);
 
-  // New: Handle video time updates during playback
-  const handleTimeUpdate = useCallback(() => {
-    if (videoRef.current) {
-      const newCurrentTime = videoRef.current.currentTime;
-      setCurrentFrameTime(newCurrentTime);
-      drawFrameToCanvas(); // Call drawFrameToCanvas here to update the visual frame
+  // Ref for the animation frame ID
+  const animationFrameId = useRef<number | null>(null);
 
-      // Update currentFrameShapes based on the new frame number during playback
-      const newFrameNumber = Math.floor(newCurrentTime * FPS);
-      const frameEntry = frameDrawingHistory.get(newFrameNumber);
-      if (frameEntry) {
-        setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
-      } else {
-        setCurrentFrameShapes([]);
+  // Animation loop for smooth playback
+  const animate = useCallback(() => {
+    if (!videoRef.current || !isPlaying) {
+      if (animationFrameId.current) {
+        cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
+      }
+      return;
+    }
+
+    const newCurrentTime = videoRef.current.currentTime;
+    setCurrentFrameTime(newCurrentTime);
+    drawFrameToCanvas(); // Draw the current video frame
+
+    // Update currentFrameShapes based on the new frame number during playback
+    const newFrameNumber = Math.floor(newCurrentTime * FPS);
+
+    setFrameDrawingHistory((prevMap) => {
+      const newMap = new Map(prevMap);
+      let frameEntry = newMap.get(newFrameNumber);
+
+      if (!frameEntry) {
+        // If no history exists for this frame, initialize it with an empty state
+        frameEntry = { history: [[]], currentIndex: 0 };
+        newMap.set(newFrameNumber, frameEntry);
+      }
+
+      // Now, use the potentially new or updated frameEntry to set currentFrameShapes
+      setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
+      return newMap;
+    });
+
+    animationFrameId.current = requestAnimationFrame(animate);
+  }, [isPlaying, drawFrameToCanvas, FPS]);
+
+  // Effect to start/stop the animation loop
+  useEffect(() => {
+    if (isPlaying) {
+      if (videoRef.current) {
+        videoRef.current.play();
+      }
+      animationFrameId.current = requestAnimationFrame(animate);
+    } else {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+      if (animationFrameId.current) {
+        cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
       }
     }
-  }, [drawFrameToCanvas, FPS, frameDrawingHistory]); // Added FPS and frameDrawingHistory to dependencies
+    // Cleanup on unmount
+    return () => {
+      if (animationFrameId.current) {
+        cancelAnimationFrame(animationFrameId.current);
+      }
+    };
+  }, [isPlaying, animate]);
 
   // New: Handle video ending
   const handleEnded = useCallback(() => {
@@ -205,6 +243,18 @@ export default function VideoFrameEditor() {
       const handleSeeked = () => {
         console.log("Video seeked. Drawing new frame.");
         drawFrameToCanvas();
+        // When manually seeking, also update currentFrameShapes
+        const newFrameNumber = Math.floor(videoRef.current!.currentTime * FPS);
+        setFrameDrawingHistory((prevMap) => {
+          const newMap = new Map(prevMap);
+          let frameEntry = newMap.get(newFrameNumber);
+          if (!frameEntry) {
+            frameEntry = { history: [[]], currentIndex: 0 };
+            newMap.set(newFrameNumber, frameEntry);
+          }
+          setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
+          return newMap;
+        });
       };
 
       const handleError = (e: Event) => {
@@ -216,31 +266,21 @@ export default function VideoFrameEditor() {
       video.addEventListener("loadeddata", handleLoadedData);
       video.addEventListener("seeked", handleSeeked);
       video.addEventListener("error", handleError);
-      video.addEventListener("timeupdate", handleTimeUpdate); // New listener
       video.addEventListener("ended", handleEnded); // New listener
+
+      // Remove the timeupdate listener as requestAnimationFrame will handle frame updates
+      // video.removeEventListener("timeupdate", handleTimeUpdate); // This line is not needed if it was never added
+      // We will still use handleTimeUpdate for manual slider changes, but not as a video event listener.
 
       return () => {
         video.removeEventListener("loadedmetadata", handleLoadedMetadata);
         video.removeEventListener("loadeddata", handleLoadedData);
         video.removeEventListener("seeked", handleSeeked);
         video.removeEventListener("error", handleError);
-        video.removeEventListener("timeupdate", handleTimeUpdate); // Cleanup
         video.removeEventListener("ended", handleEnded); // Cleanup
       };
     }
-  }, [drawFrameToCanvas, handleTimeUpdate, handleEnded]);
-
-  // Effect to control video play/pause based on isPlaying state
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video) {
-      if (isPlaying) {
-        video.play();
-      } else {
-        video.pause();
-      }
-    }
-  }, [isPlaying]); // Removed saveCurrentFrameShapes from dependencies
+  }, [drawFrameToCanvas, handleEnded, FPS]); // Added FPS to dependencies for handleSeeked
 
   // New: Unified play/pause toggle handler
   const handlePlayPauseToggle = () => {
@@ -255,6 +295,19 @@ export default function VideoFrameEditor() {
       saveCurrentFrameShapes(); // Save current frame's shapes before changing frame
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
+      // Manually trigger frame and shape update for slider changes
+      const newFrameNumber = Math.floor(newTime * FPS);
+      setFrameDrawingHistory((prevMap) => {
+        const newMap = new Map(prevMap);
+        let frameEntry = newMap.get(newFrameNumber);
+        if (!frameEntry) {
+          frameEntry = { history: [[]], currentIndex: 0 };
+          newMap.set(newFrameNumber, frameEntry);
+        }
+        setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
+        return newMap;
+      });
+      drawFrameToCanvas();
     }
   };
 
@@ -320,7 +373,7 @@ export default function VideoFrameEditor() {
         } else if (drawingTool === "circle") {
           const radius = Math.sqrt(
             Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
-              Math.pow(newPoint.y - tempShapeStartPoint.y, 2)
+              Math.pow(newPoint.y - tempShapeCurrentPoint!.y, 2) // Use tempShapeCurrentPoint for radius calculation
           );
           newShape = {
             id: uuidv4(),
