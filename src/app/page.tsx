@@ -79,7 +79,7 @@ export default function VideoFrameEditor() {
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null);
 
-  const FPS = 30;
+  const [FPS, setFPS] = useState(10);
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
   const totalFrames = Math.floor(videoDuration * FPS);
   const [frameThumbnails, setFrameThumbnails] = useState<string[]>([]);
@@ -278,8 +278,11 @@ export default function VideoFrameEditor() {
     video.pause();
     console.log("generateThumbnails: Video paused before generation loop.");
 
-    tempCanvas.width = video.videoWidth;
-    tempCanvas.height = video.videoHeight;
+    // Set canvas dimensions for thumbnails (e.g., 100x100 pixels)
+    const THUMBNAIL_WIDTH = 100;
+    const THUMBNAIL_HEIGHT = 100;
+    tempCanvas.width = THUMBNAIL_WIDTH;
+    tempCanvas.height = THUMBNAIL_HEIGHT;
 
     console.log(`Starting thumbnail generation for ${totalFrames} frames...`);
 
@@ -313,16 +316,19 @@ export default function VideoFrameEditor() {
     await Promise.all(promises);
 
     setFrameThumbnails(thumbnails);
-    video.currentTime = originalTime;
-    video.pause();
+    video.currentTime = originalTime; // Restore original video time
+    video.pause(); // Ensure video remains paused after generation
     console.log("Thumbnails generation complete. Total:", thumbnails.length);
-  }, [totalFrames, FPS]);
+  }, [totalFrames, FPS]); // Depend on FPS
+
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
       video.autoplay = false; // Explicitly disable autoplay
-      // video.load(); // Removed: Let checkVideoReady handle initial load state
+      // Change preload to metadata to prevent full video loading on mount
+      video.setAttribute("preload", "metadata");
 
       const checkVideoReady = () => {
         if (
@@ -349,8 +355,13 @@ export default function VideoFrameEditor() {
             video.videoWidth,
             video.videoHeight
           );
-          // Generate thumbnails once video is fully loaded and paused
-          generateThumbnails();
+          // Debounce thumbnail generation
+          if (debounceTimeoutRef.current) {
+            clearTimeout(debounceTimeoutRef.current);
+          }
+          debounceTimeoutRef.current = setTimeout(() => {
+            generateThumbnails();
+          }, 500); // Debounce for 500ms
         } else {
           console.log(
             "checkVideoReady: Video not fully ready yet. Scheduling retry. ReadyState:",
@@ -389,7 +400,7 @@ export default function VideoFrameEditor() {
           video.currentTime
         );
         drawFrameToCanvas();
-        const newFrameNumber = Math.floor(video.currentTime * FPS);
+        const newFrameNumber = Math.floor(video.currentTime * FPS); // Use FPS here
         setFrameDrawingHistory((prevMap) => {
           const newMap = new Map(prevMap);
           let frameEntry = newMap.get(newFrameNumber);
@@ -413,8 +424,8 @@ export default function VideoFrameEditor() {
       video.addEventListener("error", handleError);
       video.addEventListener("ended", handleEnded);
 
-      // Initial check and load
-      video.load(); // Explicitly call load here
+      // Initial load and check
+      video.load(); // Explicitly call load here to start loading metadata/data
       checkVideoReady();
 
       return () => {
@@ -423,9 +434,29 @@ export default function VideoFrameEditor() {
         video.removeEventListener("seeked", handleSeeked);
         video.removeEventListener("error", handleError);
         video.removeEventListener("ended", handleEnded);
+        if (debounceTimeoutRef.current) {
+          clearTimeout(debounceTimeoutRef.current);
+        }
       };
     }
-  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]);
+  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]); // Add FPS to dependencies
+
+  // Effect to re-generate thumbnails when FPS changes
+  useEffect(() => {
+    if (!isLoadingVideo && videoDuration > 0) {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      debounceTimeoutRef.current = setTimeout(() => {
+        generateThumbnails();
+      }, 500); // Debounce for 500ms
+    }
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [FPS, isLoadingVideo, videoDuration, generateThumbnails]);
 
   const handlePlayPauseToggle = () => {
     console.log(
@@ -1008,6 +1039,15 @@ export default function VideoFrameEditor() {
     [isPlaying, FPS, saveCurrentFrameShapes]
   );
 
+  const handleFPSChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value, 10);
+    if (!isNaN(value) && value > 0) {
+      setFPS(value);
+    } else if (e.target.value === "") {
+      setFPS(0); // Allow empty input temporarily, but it won't be used for calculations
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
       <Card className="w-full max-w-4xl shadow-lg">
@@ -1116,6 +1156,21 @@ export default function VideoFrameEditor() {
                   value={[videoPlaybackRate]}
                   onValueChange={(value) => setVideoPlaybackRate(value[0])}
                   className="flex-grow"
+                  disabled={isPlaying}
+                />
+              </div>
+              <div className="flex items-center gap-4">
+                <Label htmlFor="fps-input" className="min-w-[120px]">
+                  Enter FPS:
+                </Label>
+                <Input
+                  id="fps-input"
+                  type="number"
+                  value={FPS === 0 ? "" : FPS} // Display empty string if 0
+                  onChange={handleFPSChange}
+                  min={1}
+                  step={1}
+                  className="w-24"
                   disabled={isPlaying}
                 />
               </div>
