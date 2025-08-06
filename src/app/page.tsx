@@ -754,6 +754,20 @@ export default function VideoFrameEditor() {
     }
   }, [copiedShapeData, addFrameShapeSnapshot]);
 
+  const handleDeleteShape = useCallback(() => {
+    if (selectedShapeId) {
+      setCurrentFrameShapes((prevShapes) => {
+        const updatedShapes = prevShapes.filter(
+          (shape) => shape.id !== selectedShapeId
+        );
+        addFrameShapeSnapshot(updatedShapes);
+        return updatedShapes;
+      });
+      setSelectedShapeId(null); // Deselect after deleting
+      setCopiedShapeData(null); // Clear copied shape if it was the one deleted
+    }
+  }, [selectedShapeId, addFrameShapeSnapshot]);
+
   const handleLabelChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const newLabel = e.target.value;
@@ -1102,6 +1116,12 @@ export default function VideoFrameEditor() {
                   disabled={!copiedShapeData || isPlaying}
                 >
                   Paste Shape
+                </Button>
+                <Button
+                  onClick={handleDeleteShape}
+                  disabled={!selectedShapeId || isPlaying}
+                >
+                  Delete Selected Shape
                 </Button>
               </div>
 
