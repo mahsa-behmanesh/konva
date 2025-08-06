@@ -451,9 +451,10 @@ export default function VideoFrameEditor() {
               color: defaultShapeColor,
             };
           } else if (drawingTool === "circle") {
+            // Corrected radius calculation: distance between start point and newPoint
             const radius = Math.sqrt(
               Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
-                Math.pow(newPoint.y - tempShapeCurrentPoint!.y, 2)
+                Math.pow(newPoint.y - tempShapeStartPoint.y, 2)
             );
             newShape = {
               id: uuidv4(),

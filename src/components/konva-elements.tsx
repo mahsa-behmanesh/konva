@@ -333,7 +333,7 @@ export default function KonvaElements({
                 y={tempShapeStartPoint.y}
                 radius={Math.sqrt(
                   Math.pow(tempShapeCurrentPoint.x - tempShapeStartPoint.x, 2) +
-                    Math.pow(tempShapeCurrentPoint.y - tempShapeStartPoint.y, 2)
+                    Math.pow(tempShapeCurrentPoint.y - tempShapeStartPoint.y, 2) // Corrected: use tempShapeStartPoint.y
                 )}
                 stroke="blue" // Temp circle always blue
                 strokeWidth={2}
