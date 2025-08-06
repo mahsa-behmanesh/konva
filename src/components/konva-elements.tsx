@@ -8,6 +8,7 @@ import {
   Circle,
   Rect,
   Transformer,
+  Text,
 } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type {
@@ -124,9 +125,26 @@ export default function KonvaElements({
           const strokeWidth = isSelected ? 4 : 2; // Thicker stroke for selected shape
           const strokeColor = shape.color || "#FF0000"; // Use shape's color or default to red
 
+          let textX = 0;
+          let textY = 0;
+
           if (shape.type === "polygon") {
-            return (
-              <React.Fragment key={shape.id}>
+            // Use the first point of the polygon for label position
+            if (shape.points.length > 0) {
+              textX = shape.points[0].x;
+              textY = shape.points[0].y - 20; // Offset above the point
+            }
+          } else if (shape.type === "rectangle") {
+            textX = shape.x;
+            textY = shape.y - 20; // Offset above the rectangle
+          } else if (shape.type === "circle") {
+            textX = shape.x - shape.radius; // Left edge of the circle
+            textY = shape.y - shape.radius - 20; // Offset above the circle
+          }
+
+          return (
+            <React.Fragment key={shape.id}>
+              {shape.type === "polygon" && (
                 <Line
                   //@ts-expect-error ok . .
                   ref={isSelected ? selectedShapeRef : null} // Attach ref if selected
@@ -156,132 +174,149 @@ export default function KonvaElements({
                     ); // Pass first point's new x,y
                   }}
                 />
-                {/* Render draggable points for selected polygons */}
-                {isSelected &&
-                  toolMode === "select" &&
-                  (shape as PolygonShape).points.map((point, index) => (
-                    <Circle
-                      key={`${shape.id}-point-${index}`}
-                      x={point.x}
-                      y={point.y}
-                      radius={6} // Slightly larger for easier dragging
-                      fill="blue"
-                      stroke="white"
-                      strokeWidth={1}
-                      draggable
-                      onDragEnd={(e) =>
-                        onPolygonPointDragEnd(
-                          shape.id,
-                          index,
-                          e.target.x(),
-                          e.target.y()
-                        )
-                      }
-                    />
-                  ))}
-              </React.Fragment>
-            );
-          } else if (shape.type === "rectangle") {
-            return (
-              <Rect
-                key={shape.id}
-                //@ts-expect-error ok . .
+              )}
+              {shape.type === "rectangle" && (
+                <Rect
+                  key={shape.id}
+                  //@ts-expect-error ok . .
 
-                ref={isSelected ? selectedShapeRef : null} // Attach ref if selected
-                x={shape.x}
-                y={shape.y}
-                width={shape.width}
-                height={shape.height}
-                stroke={strokeColor} // Use custom color
-                strokeWidth={strokeWidth}
-                draggable={toolMode === "select"} // Make draggable in select mode
-                onClick={() => onShapeClick(shape.id)}
-                onTap={() => onShapeClick(shape.id)} // For mobile tap
-                onDragEnd={(e) =>
-                  onShapeDragEnd(
-                    shape.id,
-                    e.target.x(),
-                    e.target.y(),
-                    shape.type
-                  )
-                }
-                onTransformEnd={(e) => {
-                  // transformer is changing scale of the node
-                  // and NOT its width/height
-                  // but in the store we have only width/height
-                  // to match the data structure we need to reset scale values
-                  const node = e.target as Konva.Rect; // Type assertion
-                  const scaleX = node.scaleX();
-                  const scaleY = node.scaleY();
+                  ref={isSelected ? selectedShapeRef : null} // Attach ref if selected
+                  x={shape.x}
+                  y={shape.y}
+                  width={shape.width}
+                  height={shape.height}
+                  stroke={strokeColor} // Use custom color
+                  strokeWidth={strokeWidth}
+                  draggable={toolMode === "select"} // Make draggable in select mode
+                  onClick={() => onShapeClick(shape.id)}
+                  onTap={() => onShapeClick(shape.id)} // For mobile tap
+                  onDragEnd={(e) =>
+                    onShapeDragEnd(
+                      shape.id,
+                      e.target.x(),
+                      e.target.y(),
+                      shape.type
+                    )
+                  }
+                  onTransformEnd={(e) => {
+                    // transformer is changing scale of the node
+                    // and NOT its width/height
+                    // but in the store we have only width/height
+                    // to match the data structure we need to reset scale values
+                    const node = e.target as Konva.Rect; // Type assertion
+                    const scaleX = node.scaleX();
+                    const scaleY = node.scaleY();
 
-                  // reset scale to 1
-                  node.scaleX(1);
-                  node.scaleY(1);
+                    // reset scale to 1
+                    node.scaleX(1);
+                    node.scaleY(1);
 
-                  onShapeTransformEnd(
-                    shape.id,
-                    {
-                      x: node.x(),
-                      y: node.y(),
-                      width: Math.max(5, node.width() * scaleX),
-                      height: Math.max(5, node.height() * scaleY),
-                    },
-                    shape.type
-                  );
-                }}
-              />
-            );
-          } else if (shape.type === "circle") {
-            return (
-              <Circle
-                key={shape.id}
-                //@ts-expect-error ok . .
+                    onShapeTransformEnd(
+                      shape.id,
+                      {
+                        x: node.x(),
+                        y: node.y(),
+                        width: Math.max(5, node.width() * scaleX),
+                        height: Math.max(5, node.height() * scaleY),
+                      },
+                      shape.type
+                    );
+                  }}
+                />
+              )}
+              {shape.type === "circle" && (
+                <Circle
+                  key={shape.id}
+                  //@ts-expect-error ok . .
 
-                ref={isSelected ? selectedShapeRef : null} // Attach ref if selected
-                x={shape.x}
-                y={shape.y}
-                radius={shape.radius}
-                stroke={strokeColor} // Use custom color
-                strokeWidth={strokeWidth}
-                draggable={toolMode === "select"} // Make draggable in select mode
-                onClick={() => onShapeClick(shape.id)}
-                onTap={() => onShapeClick(shape.id)} // For mobile tap
-                onDragEnd={(e) =>
-                  onShapeDragEnd(
-                    shape.id,
-                    e.target.x(),
-                    e.target.y(),
-                    shape.type
-                  )
-                }
-                onTransformEnd={(e) => {
-                  const node = e.target as Konva.Circle; // Type assertion
-                  const scaleX = node.scaleX();
-                  const scaleY = node.scaleY();
+                  ref={isSelected ? selectedShapeRef : null} // Attach ref if selected
+                  x={shape.x}
+                  y={shape.y}
+                  radius={shape.radius}
+                  stroke={strokeColor} // Use custom color
+                  strokeWidth={strokeWidth}
+                  draggable={toolMode === "select"} // Make draggable in select mode
+                  onClick={() => onShapeClick(shape.id)}
+                  onTap={() => onShapeClick(shape.id)} // For mobile tap
+                  onDragEnd={(e) =>
+                    onShapeDragEnd(
+                      shape.id,
+                      e.target.x(),
+                      e.target.y(),
+                      shape.type
+                    )
+                  }
+                  onTransformEnd={(e) => {
+                    const node = e.target as Konva.Circle; // Type assertion
+                    const scaleX = node.scaleX();
+                    const scaleY = node.scaleY();
 
-                  node.scaleX(1);
-                  node.scaleY(1);
+                    node.scaleX(1);
+                    node.scaleY(1);
 
-                  // For a circle, radius is scaled by the larger of scaleX/scaleY
-                  const newRadius = Math.max(
-                    5,
-                    node.radius() * Math.max(scaleX, scaleY)
-                  );
+                    // For a circle, radius is scaled by the larger of scaleX/scaleY
+                    const newRadius = Math.max(
+                      5,
+                      node.radius() * Math.max(scaleX, scaleY)
+                    );
 
-                  onShapeTransformEnd(
-                    shape.id,
-                    {
-                      x: node.x(),
-                      y: node.y(),
-                      radius: newRadius,
-                    },
-                    shape.type
-                  );
-                }}
-              />
-            );
-          }
-          return null;
+                    onShapeTransformEnd(
+                      shape.id,
+                      {
+                        x: node.x(),
+                        y: node.y(),
+                        radius: newRadius,
+                      },
+                      shape.type
+                    );
+                  }}
+                />
+              )}
+
+              {/* Render draggable points for selected polygons */}
+              {isSelected &&
+                toolMode === "select" &&
+                shape.type === "polygon" &&
+                (shape as PolygonShape).points.map((point, index) => (
+                  <Circle
+                    key={`${shape.id}-point-${index}`}
+                    x={point.x}
+                    y={point.y}
+                    radius={6} // Slightly larger for easier dragging
+                    fill="blue"
+                    stroke="white"
+                    strokeWidth={1}
+                    draggable
+                    onDragEnd={(e) =>
+                      onPolygonPointDragEnd(
+                        shape.id,
+                        index,
+                        e.target.x(),
+                        e.target.y()
+                      )
+                    }
+                  />
+                ))}
+
+              {/* Render label for selected shape */}
+              {isSelected && (
+                <Text
+                  x={textX}
+                  y={textY}
+                  text={shape.label}
+                  fontSize={20}
+                  fill="yellow"
+                  stroke="black"
+                  strokeWidth={1}
+                  padding={5}
+                  // shadowColor="black"
+                  // shadowBlur={5}
+                  // shadowOffset={{ x: 2, y: 2 }}
+                  // shadowOpacity={0.5}
+                />
+              )}
+            </React.Fragment>
+          );
         })}
 
         {/* Render active polygon points */}
