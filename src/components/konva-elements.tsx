@@ -20,8 +20,17 @@ interface KonvaElementsProps {
   tempShapeStartPoint: Point | null; // First click for rectangle/circle
   tempShapeCurrentPoint: Point | null; // Current mouse position for dynamic preview
   drawingTool: "polygon" | "rectangle" | "circle"; // New prop to help rendering temp shapes
+  toolMode: "draw" | "select"; // New prop for tool mode
+  selectedShapeId: string | null; // New prop for selected shape
   onStageClick: (e: KonvaEventObject<MouseEvent>) => void;
   onStageMouseMove: (e: KonvaEventObject<MouseEvent>) => void; // New prop for mouse move
+  onShapeClick: (shapeId: string) => void; // New prop for shape click
+  onShapeDragEnd: (
+    shapeId: string,
+    newX: number,
+    newY: number,
+    type: ShapeData["type"]
+  ) => void; // New prop for shape drag end
 }
 
 export default function KonvaElements({
@@ -33,8 +42,12 @@ export default function KonvaElements({
   tempShapeStartPoint,
   tempShapeCurrentPoint,
   drawingTool,
+  toolMode,
+  selectedShapeId,
   onStageClick,
   onStageMouseMove,
+  onShapeClick,
+  onShapeDragEnd,
 }: KonvaElementsProps) {
   if (!currentFrameImage || width === 0 || height === 0) {
     return (
@@ -64,16 +77,38 @@ export default function KonvaElements({
 
         {/* Render completed shapes */}
         {currentFrameShapes.map((shape) => {
+          const isSelected = shape.id === selectedShapeId;
+          const strokeWidth = isSelected ? 4 : 2; // Thicker stroke for selected shape
+
           if (shape.type === "polygon") {
             return (
               <Line
                 key={shape.id}
                 points={pointsToNumberArray(shape.points)}
                 stroke="red"
-                strokeWidth={2}
+                strokeWidth={strokeWidth}
                 closed={shape.isClosed}
                 lineJoin="round"
                 lineCap="round"
+                draggable={toolMode === "select"} // Make draggable in select mode
+                onClick={() => onShapeClick(shape.id)}
+                onTap={() => onShapeClick(shape.id)} // For mobile tap
+                onDragEnd={(e) => {
+                  // Konva Line's x and y are relative to its initial position (0,0 by default)
+                  // We need to apply this translation to each point and reset Konva's internal x,y
+                  const newPoints = shape.points.map((p) => ({
+                    x: p.x + e.target.x(),
+                    y: p.y + e.target.y(),
+                  }));
+                  e.target.x(0); // Reset Konva's internal x
+                  e.target.y(0); // Reset Konva's internal y
+                  onShapeDragEnd(
+                    shape.id,
+                    newPoints[0].x,
+                    newPoints[0].y,
+                    shape.type
+                  ); // Pass first point's new x,y
+                }}
               />
             );
           } else if (shape.type === "rectangle") {
@@ -85,7 +120,18 @@ export default function KonvaElements({
                 width={shape.width}
                 height={shape.height}
                 stroke="green"
-                strokeWidth={2}
+                strokeWidth={strokeWidth}
+                draggable={toolMode === "select"} // Make draggable in select mode
+                onClick={() => onShapeClick(shape.id)}
+                onTap={() => onShapeClick(shape.id)} // For mobile tap
+                onDragEnd={(e) =>
+                  onShapeDragEnd(
+                    shape.id,
+                    e.target.x(),
+                    e.target.y(),
+                    shape.type
+                  )
+                }
               />
             );
           } else if (shape.type === "circle") {
@@ -96,7 +142,18 @@ export default function KonvaElements({
                 y={shape.y}
                 radius={shape.radius}
                 stroke="blue"
-                strokeWidth={2}
+                strokeWidth={strokeWidth}
+                draggable={toolMode === "select"} // Make draggable in select mode
+                onClick={() => onShapeClick(shape.id)}
+                onTap={() => onShapeClick(shape.id)} // For mobile tap
+                onDragEnd={(e) =>
+                  onShapeDragEnd(
+                    shape.id,
+                    e.target.x(),
+                    e.target.y(),
+                    shape.type
+                  )
+                }
               />
             );
           }

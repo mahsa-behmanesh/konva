@@ -7,7 +7,13 @@ import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import dynamic from "next/dynamic";
-import type { ShapeData, Point, PolygonShape } from "@/types/drawing";
+import type {
+  ShapeData,
+  Point,
+  PolygonShape,
+  RectangleShape,
+  CircleShape,
+} from "@/types/drawing";
 import { v4 as uuidv4 } from "uuid"; // For unique IDs
 
 const KonvaElements = dynamic(() => import("@/components/konva-elements"), {
@@ -26,12 +32,23 @@ export default function VideoFrameEditor() {
     width: 0,
     height: 0,
   });
-  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [isDrawingMode, setIsDrawingMode] = useState(false); // This will now control toolMode
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
-  const [isPlaying, setIsPlaying] = useState(false); // New state for video playback
-  const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0); // New state for playback rate
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0);
 
-  // New state for drawing tool selection
+  // New state for tool mode: "draw" or "select"
+  const [toolMode, setToolMode] = useState<"draw" | "select">("draw");
+
+  // New state for selected shape
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+
+  // New state for copied shape data
+  const [copiedShapeData, setCopiedShapeData] = useState<ShapeData | null>(
+    null
+  );
+
+  // State for drawing tool selection
   const [drawingTool, setDrawingTool] = useState<
     "polygon" | "rectangle" | "circle"
   >("polygon");
@@ -121,6 +138,7 @@ export default function VideoFrameEditor() {
     setActivePolygonHistoryIndex(0); // Reset history index
     setTempShapeStartPoint(null); // Clear temp shape points
     setTempShapeCurrentPoint(null); // Clear temp shape points
+    setSelectedShapeId(null); // Clear selected shape when changing frames
   }, [currentFrameNumber, frameDrawingHistory, addFrameShapeSnapshot]);
 
   const drawFrameToCanvas = useCallback(() => {
@@ -328,67 +346,75 @@ export default function VideoFrameEditor() {
     }
   };
 
+  // Handle click on Konva stage
   const handleStageClick = (e: any) => {
-    if (!isDrawingMode || isPlaying) return; // Disable drawing during playback
+    if (isPlaying) return; // Disable interactions during playback
 
-    const stage = e.target.getStage();
-    const pointerPosition = stage.getPointerPosition();
-    if (!pointerPosition) return;
+    if (toolMode === "draw") {
+      const stage = e.target.getStage();
+      const pointerPosition = stage.getPointerPosition();
+      if (!pointerPosition) return;
 
-    const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
+      const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
 
-    if (drawingTool === "polygon") {
-      const newPoints = [...activePolygonPoints, newPoint];
-      const newHistory = activePolygonHistory.slice(
-        0,
-        activePolygonHistoryIndex + 1
-      );
-      newHistory.push(newPoints);
-      setActivePolygonHistory(newHistory);
-      setActivePolygonHistoryIndex(newHistory.length - 1);
-      setActivePolygonPoints(newPoints);
-    } else if (drawingTool === "rectangle" || drawingTool === "circle") {
-      if (!tempShapeStartPoint) {
-        setTempShapeStartPoint(newPoint);
-        setTempShapeCurrentPoint(newPoint); // Initialize current point for preview
-      } else {
-        // Second click for rectangle/circle
-        let newShape: ShapeData | null = null;
-        if (drawingTool === "rectangle") {
-          const x = Math.min(tempShapeStartPoint.x, newPoint.x);
-          const y = Math.min(tempShapeStartPoint.y, newPoint.y);
-          const width = Math.abs(tempShapeStartPoint.x - newPoint.x);
-          const height = Math.abs(tempShapeStartPoint.y - newPoint.y);
-          newShape = {
-            id: uuidv4(),
-            type: "rectangle",
-            x,
-            y,
-            width,
-            height,
-          };
-        } else if (drawingTool === "circle") {
-          const radius = Math.sqrt(
-            Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
-              Math.pow(newPoint.y - tempShapeCurrentPoint!.y, 2) // Use tempShapeCurrentPoint for radius calculation
-          );
-          newShape = {
-            id: uuidv4(),
-            type: "circle",
-            x: tempShapeStartPoint.x,
-            y: tempShapeStartPoint.y,
-            radius,
-          };
+      if (drawingTool === "polygon") {
+        const newPoints = [...activePolygonPoints, newPoint];
+        const newHistory = activePolygonHistory.slice(
+          0,
+          activePolygonHistoryIndex + 1
+        );
+        newHistory.push(newPoints);
+        setActivePolygonHistory(newHistory);
+        setActivePolygonHistoryIndex(newHistory.length - 1);
+        setActivePolygonPoints(newPoints);
+      } else if (drawingTool === "rectangle" || drawingTool === "circle") {
+        if (!tempShapeStartPoint) {
+          setTempShapeStartPoint(newPoint);
+          setTempShapeCurrentPoint(newPoint); // Initialize current point for preview
+        } else {
+          // Second click for rectangle/circle
+          let newShape: ShapeData | null = null;
+          if (drawingTool === "rectangle") {
+            const x = Math.min(tempShapeStartPoint.x, newPoint.x);
+            const y = Math.min(tempShapeStartPoint.y, newPoint.y);
+            const width = Math.abs(tempShapeStartPoint.x - newPoint.x);
+            const height = Math.abs(tempShapeStartPoint.y - newPoint.y);
+            newShape = {
+              id: uuidv4(),
+              type: "rectangle",
+              x,
+              y,
+              width,
+              height,
+            };
+          } else if (drawingTool === "circle") {
+            const radius = Math.sqrt(
+              Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
+                Math.pow(newPoint.y - tempShapeCurrentPoint!.y, 2) // Use tempShapeCurrentPoint for radius calculation
+            );
+            newShape = {
+              id: uuidv4(),
+              type: "circle",
+              x: tempShapeStartPoint.x,
+              y: tempShapeStartPoint.y,
+              radius,
+            };
+          }
+          if (newShape) {
+            setCurrentFrameShapes((prevShapes) => {
+              const updatedShapes = [...prevShapes, newShape!];
+              addFrameShapeSnapshot(updatedShapes); // Add snapshot after completing shape
+              return updatedShapes;
+            });
+          }
+          setTempShapeStartPoint(null); // Clear temp points after completing shape
+          setTempShapeCurrentPoint(null);
         }
-        if (newShape) {
-          setCurrentFrameShapes((prevShapes) => {
-            const updatedShapes = [...prevShapes, newShape!];
-            addFrameShapeSnapshot(updatedShapes); // Add snapshot after completing shape
-            return updatedShapes;
-          });
-        }
-        setTempShapeStartPoint(null); // Clear temp points after completing shape
-        setTempShapeCurrentPoint(null);
+      }
+    } else if (toolMode === "select") {
+      // If clicking on the stage background in select mode, deselect any shape
+      if (e.target === e.target.getStage()) {
+        setSelectedShapeId(null);
       }
     }
   };
@@ -408,6 +434,58 @@ export default function VideoFrameEditor() {
       setTempShapeCurrentPoint({ x: pointerPosition.x, y: pointerPosition.y });
     }
   };
+
+  // New: Handle click on a specific shape
+  const handleShapeClick = useCallback(
+    (shapeId: string) => {
+      if (toolMode === "select" && !isPlaying) {
+        setSelectedShapeId(shapeId);
+      }
+    },
+    [toolMode, isPlaying]
+  );
+
+  // New: Handle drag end for a shape
+  const handleShapeDragEnd = useCallback(
+    (shapeId: string, newX: number, newY: number, type: ShapeData["type"]) => {
+      if (isPlaying) return;
+
+      setCurrentFrameShapes((prevShapes) => {
+        const updatedShapes = prevShapes.map((shape) => {
+          if (shape.id === shapeId) {
+            if (type === "polygon") {
+              // For polygons, newX and newY are the new position of the first point
+              // We need to calculate the delta from the original first point
+              const originalShape = prevShapes.find(
+                (s) => s.id === shapeId
+              ) as PolygonShape;
+              if (!originalShape || originalShape.points.length === 0)
+                return shape;
+
+              const deltaX = newX - originalShape.points[0].x;
+              const deltaY = newY - originalShape.points[0].y;
+
+              return {
+                ...shape,
+                points: (shape as PolygonShape).points.map((p) => ({
+                  x: p.x + deltaX,
+                  y: p.y + deltaY,
+                })),
+              } as PolygonShape;
+            } else if (type === "rectangle") {
+              return { ...shape, x: newX, y: newY } as RectangleShape;
+            } else if (type === "circle") {
+              return { ...shape, x: newX, y: newY } as CircleShape;
+            }
+          }
+          return shape;
+        });
+        addFrameShapeSnapshot(updatedShapes); // Save snapshot after moving shape
+        return updatedShapes;
+      });
+    },
+    [isPlaying, addFrameShapeSnapshot]
+  );
 
   // Undo/Redo for active polygon points (while drawing)
   const handleUndoPolygon = () => {
@@ -438,6 +516,7 @@ export default function VideoFrameEditor() {
           currentIndex: newIndex,
         });
         setCurrentFrameShapes(currentEntry.history[newIndex]);
+        setSelectedShapeId(null); // Deselect shape on undo/redo
       }
       return newMap;
     });
@@ -457,6 +536,7 @@ export default function VideoFrameEditor() {
           currentIndex: newIndex,
         });
         setCurrentFrameShapes(currentEntry.history[newIndex]);
+        setSelectedShapeId(null); // Deselect shape on undo/redo
       }
       return newMap;
     });
@@ -470,6 +550,7 @@ export default function VideoFrameEditor() {
     setTempShapeStartPoint(null);
     setTempShapeCurrentPoint(null);
     addFrameShapeSnapshot([]); // Add snapshot of empty shapes
+    setSelectedShapeId(null); // Clear selected shape
   };
 
   const handleClosePolygon = () => {
@@ -491,6 +572,64 @@ export default function VideoFrameEditor() {
       setActivePolygonHistoryIndex(0); // Reset history index
     }
   };
+
+  // New: Handle Copy Shape
+  const handleCopyShape = useCallback(() => {
+    if (selectedShapeId) {
+      const shapeToCopy = currentFrameShapes.find(
+        (s) => s.id === selectedShapeId
+      );
+      if (shapeToCopy) {
+        // Create a deep copy to avoid reference issues
+        setCopiedShapeData(JSON.parse(JSON.stringify(shapeToCopy)));
+        console.log("Shape copied:", shapeToCopy);
+      }
+    }
+  }, [selectedShapeId, currentFrameShapes]);
+
+  // New: Handle Paste Shape
+  const handlePasteShape = useCallback(() => {
+    if (copiedShapeData) {
+      const newShapeId = uuidv4();
+      let pastedShape: ShapeData;
+
+      // Create a new shape with a new ID and slightly offset its position
+      if (copiedShapeData.type === "polygon") {
+        pastedShape = {
+          ...copiedShapeData,
+          id: newShapeId,
+          points: copiedShapeData.points.map((p) => ({
+            x: p.x + 10,
+            y: p.y + 10,
+          })),
+        } as PolygonShape;
+      } else if (copiedShapeData.type === "rectangle") {
+        pastedShape = {
+          ...copiedShapeData,
+          id: newShapeId,
+          x: copiedShapeData.x + 10,
+          y: copiedShapeData.y + 10,
+        } as RectangleShape;
+      } else if (copiedShapeData.type === "circle") {
+        pastedShape = {
+          ...copiedShapeData,
+          id: newShapeId,
+          x: copiedShapeData.x + 10,
+          y: copiedShapeData.y + 10,
+        } as CircleShape;
+      } else {
+        return; // Should not happen
+      }
+
+      setCurrentFrameShapes((prevShapes) => {
+        const updatedShapes = [...prevShapes, pastedShape];
+        addFrameShapeSnapshot(updatedShapes); // Add snapshot after pasting
+        return updatedShapes;
+      });
+      setSelectedShapeId(newShapeId); // Select the newly pasted shape
+      console.log("Shape pasted:", pastedShape);
+    }
+  }, [copiedShapeData, addFrameShapeSnapshot]);
 
   // Reset temporary drawing states when tool changes
   useEffect(() => {
@@ -520,6 +659,20 @@ export default function VideoFrameEditor() {
     addFrameShapeSnapshot,
   ]);
 
+  // Effect to sync isDrawingMode with toolMode
+  useEffect(() => {
+    if (isDrawingMode) {
+      setToolMode("draw");
+    } else {
+      setToolMode("select");
+      setTempShapeStartPoint(null); // Clear temp drawing points when switching to select mode
+      setTempShapeCurrentPoint(null);
+      setActivePolygonPoints([]); // Clear active polygon when switching to select mode
+      setActivePolygonHistory([[]]);
+      setActivePolygonHistoryIndex(0);
+    }
+  }, [isDrawingMode]);
+
   const currentFrameDrawingEntry = frameDrawingHistory.get(currentFrameNumber);
   const canUndoShape =
     currentFrameDrawingEntry && currentFrameDrawingEntry.currentIndex > 0;
@@ -527,6 +680,9 @@ export default function VideoFrameEditor() {
     currentFrameDrawingEntry &&
     currentFrameDrawingEntry.currentIndex <
       currentFrameDrawingEntry.history.length - 1;
+
+  const isSelectMode = toolMode === "select";
+  const isDrawMode = toolMode === "draw";
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
@@ -572,8 +728,12 @@ export default function VideoFrameEditor() {
                 tempShapeStartPoint={tempShapeStartPoint}
                 tempShapeCurrentPoint={tempShapeCurrentPoint}
                 drawingTool={drawingTool}
+                toolMode={toolMode} // Pass toolMode
+                selectedShapeId={selectedShapeId} // Pass selectedShapeId
                 onStageClick={handleStageClick}
                 onStageMouseMove={handleStageMouseMove}
+                onShapeClick={handleShapeClick} // Pass shape click handler
+                onShapeDragEnd={handleShapeDragEnd} // Pass shape drag end handler
               />
             ) : (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
@@ -582,7 +742,7 @@ export default function VideoFrameEditor() {
             )}
           </div>
 
-          {videoDuration > 0 && (
+          {true && (
             <div className="w-full space-y-4">
               <div className="flex items-center gap-4">
                 <Label htmlFor="frame-slider" className="min-w-[80px]">
@@ -639,7 +799,7 @@ export default function VideoFrameEditor() {
             <Button
               onClick={() => setIsDrawingMode(!isDrawingMode)}
               variant={isDrawingMode ? "destructive" : "default"}
-              disabled={isPlaying} // Disable drawing mode toggle during playback
+              disabled={isPlaying}
             >
               {isDrawingMode ? "Disable Drawing" : "Enable Drawing"}
             </Button>
@@ -648,7 +808,8 @@ export default function VideoFrameEditor() {
               disabled={
                 (currentFrameShapes.length === 0 &&
                   activePolygonPoints.length === 0) ||
-                isPlaying
+                isPlaying ||
+                isSelectMode
               }
             >
               Clear Drawing
@@ -658,14 +819,15 @@ export default function VideoFrameEditor() {
               disabled={
                 drawingTool !== "polygon" ||
                 activePolygonPoints.length < 3 ||
-                isPlaying
+                isPlaying ||
+                isSelectMode
               }
             >
               Close Polygon
             </Button>
           </div>
 
-          {drawingTool === "polygon" && (
+          {isDrawMode && drawingTool === "polygon" && (
             <div className="flex justify-center gap-2 mt-2">
               <Button
                 onClick={handleUndoPolygon}
@@ -700,29 +862,48 @@ export default function VideoFrameEditor() {
             </Button>
           </div>
 
-          <div className="flex flex-col sm:flex-row justify-center gap-2 mt-4">
-            <Button
-              onClick={() => setDrawingTool("polygon")}
-              variant={drawingTool === "polygon" ? "secondary" : "outline"}
-              disabled={isPlaying} // Disable tool selection during playback
-            >
-              Draw Polygon
-            </Button>
-            <Button
-              onClick={() => setDrawingTool("rectangle")}
-              variant={drawingTool === "rectangle" ? "secondary" : "outline"}
-              disabled={isPlaying} // Disable tool selection during playback
-            >
-              Draw Rectangle
-            </Button>
-            <Button
-              onClick={() => setDrawingTool("circle")}
-              variant={drawingTool === "circle" ? "secondary" : "outline"}
-              disabled={isPlaying} // Disable tool selection during playback
-            >
-              Draw Circle
-            </Button>
-          </div>
+          {isDrawMode && (
+            <div className="flex flex-col sm:flex-row justify-center gap-2 mt-4">
+              <Button
+                onClick={() => setDrawingTool("polygon")}
+                variant={drawingTool === "polygon" ? "secondary" : "outline"}
+                disabled={isPlaying}
+              >
+                Draw Polygon
+              </Button>
+              <Button
+                onClick={() => setDrawingTool("rectangle")}
+                variant={drawingTool === "rectangle" ? "secondary" : "outline"}
+                disabled={isPlaying}
+              >
+                Draw Rectangle
+              </Button>
+              <Button
+                onClick={() => setDrawingTool("circle")}
+                variant={drawingTool === "circle" ? "secondary" : "outline"}
+                disabled={isPlaying}
+              >
+                Draw Circle
+              </Button>
+            </div>
+          )}
+
+          {isSelectMode && (
+            <div className="flex justify-center gap-2 mt-4">
+              <Button
+                onClick={handleCopyShape}
+                disabled={!selectedShapeId || isPlaying}
+              >
+                Copy Shape
+              </Button>
+              <Button
+                onClick={handlePasteShape}
+                disabled={!copiedShapeData || isPlaying}
+              >
+                Paste Shape
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
