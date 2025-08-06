@@ -79,13 +79,14 @@ export default function KonvaElements({
         {currentFrameShapes.map((shape) => {
           const isSelected = shape.id === selectedShapeId;
           const strokeWidth = isSelected ? 4 : 2; // Thicker stroke for selected shape
+          const strokeColor = shape.color || "#FF0000"; // Use shape's color or default to red
 
           if (shape.type === "polygon") {
             return (
               <Line
                 key={shape.id}
                 points={pointsToNumberArray(shape.points)}
-                stroke="red"
+                stroke={strokeColor} // Use custom color
                 strokeWidth={strokeWidth}
                 closed={shape.isClosed}
                 lineJoin="round"
@@ -119,7 +120,7 @@ export default function KonvaElements({
                 y={shape.y}
                 width={shape.width}
                 height={shape.height}
-                stroke="green"
+                stroke={strokeColor} // Use custom color
                 strokeWidth={strokeWidth}
                 draggable={toolMode === "select"} // Make draggable in select mode
                 onClick={() => onShapeClick(shape.id)}
@@ -141,7 +142,7 @@ export default function KonvaElements({
                 x={shape.x}
                 y={shape.y}
                 radius={shape.radius}
-                stroke="blue"
+                stroke={strokeColor} // Use custom color
                 strokeWidth={strokeWidth}
                 draggable={toolMode === "select"} // Make draggable in select mode
                 onClick={() => onShapeClick(shape.id)}
@@ -165,7 +166,7 @@ export default function KonvaElements({
           <>
             <Line
               points={pointsToNumberArray(activePolygonPoints)}
-              stroke="red"
+              stroke="red" // Active polygon always red
               strokeWidth={2}
               closed={false}
               lineJoin="round"
@@ -198,7 +199,7 @@ export default function KonvaElements({
                 height={Math.abs(
                   tempShapeStartPoint.y - tempShapeCurrentPoint.y
                 )}
-                stroke="green"
+                stroke="green" // Temp rectangle always green
                 strokeWidth={2}
                 dash={[10, 5]} // Dashed line for temporary drawing
               />
@@ -211,7 +212,7 @@ export default function KonvaElements({
                   Math.pow(tempShapeCurrentPoint.x - tempShapeStartPoint.x, 2) +
                     Math.pow(tempShapeCurrentPoint.y - tempShapeStartPoint.y, 2)
                 )}
-                stroke="blue"
+                stroke="blue" // Temp circle always blue
                 strokeWidth={2}
                 dash={[10, 5]} // Dashed line for temporary drawing
               />

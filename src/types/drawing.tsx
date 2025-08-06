@@ -8,6 +8,8 @@ export interface PolygonShape {
   type: "polygon";
   points: Point[];
   isClosed: boolean;
+  label: string; // New: Label for the shape
+  color: string; // New: Color for the shape
 }
 
 export interface RectangleShape {
@@ -17,6 +19,8 @@ export interface RectangleShape {
   y: number;
   width: number;
   height: number;
+  label: string; // New: Label for the shape
+  color: string; // New: Color for the shape
 }
 
 export interface CircleShape {
@@ -25,6 +29,8 @@ export interface CircleShape {
   x: number; // center x
   y: number; // center y
   radius: number;
+  label: string; // New: Label for the shape
+  color: string; // New: Color for the shape
 }
 
 export type ShapeData = PolygonShape | RectangleShape | CircleShape;
