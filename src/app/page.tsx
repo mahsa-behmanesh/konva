@@ -34,7 +34,7 @@ export default function VideoFrameEditor() {
     height: 0,
   });
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [isLoadingVideo, setIsLoadingVideo] = useState(true);
+  const [isLoadingVideo, setIsLoadingVideo] = useState(true); // Start as true
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0);
 
@@ -156,10 +156,22 @@ export default function VideoFrameEditor() {
             width: video.videoWidth,
             height: video.videoHeight,
           });
-          setIsLoadingVideo(false);
+          // Only set isLoadingVideo to false if duration is also known
+          if (video.duration > 0) {
+            setIsLoadingVideo(false);
+            console.log(
+              "drawFrameToCanvas: Video fully ready, isLoadingVideo set to false."
+            );
+          }
         }
       } else {
-        // console.log("Video not ready for drawing yet. ReadyState:", video.readyState, "Dimensions:", video.videoWidth, video.videoHeight);
+        console.log(
+          "drawFrameToCanvas: Video not ready for drawing yet. ReadyState:",
+          video.readyState,
+          "Dimensions:",
+          video.videoWidth,
+          video.videoHeight
+        );
       }
     }
   }, []);
@@ -230,21 +242,66 @@ export default function VideoFrameEditor() {
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
+      const checkVideoReady = () => {
+        if (
+          video.readyState >= 2 &&
+          video.videoWidth > 0 &&
+          video.duration > 0
+        ) {
+          drawFrameToCanvas();
+          setVideoDuration(video.duration);
+          setVideoDimensions({
+            width: video.videoWidth,
+            height: video.videoHeight,
+          });
+          setCurrentFrameTime(0); // Ensure it starts at 0
+          setIsLoadingVideo(false);
+          console.log(
+            "checkVideoReady: Video fully ready and loaded. Duration:",
+            video.duration,
+            "Dimensions:",
+            video.videoWidth,
+            video.videoHeight
+          );
+        } else {
+          console.log(
+            "checkVideoReady: Video not fully ready yet. Scheduling retry. ReadyState:",
+            video.readyState,
+            "Dimensions:",
+            video.videoWidth,
+            video.videoHeight,
+            "Duration:",
+            video.duration
+          );
+          // Retry after a short delay if not fully ready
+          setTimeout(checkVideoReady, 100);
+        }
+      };
+
       const handleLoadedMetadata = () => {
-        setVideoDuration(video.duration);
-        setCurrentFrameTime(0);
-        console.log("Video metadata loaded. Duration:", video.duration);
+        console.log(
+          "Event: loadedmetadata. Video Width:",
+          video.videoWidth,
+          "Video Height:",
+          video.videoHeight,
+          "Duration:",
+          video.duration
+        );
+        checkVideoReady(); // Attempt to set ready state and draw
       };
 
       const handleLoadedData = () => {
-        console.log("Video loaded data. Attempting to draw initial frame.");
-        drawFrameToCanvas();
+        console.log("Event: loadeddata. Attempting to draw initial frame.");
+        checkVideoReady(); // Attempt to set ready state and draw
       };
 
       const handleSeeked = () => {
-        console.log("Video seeked. Drawing new frame.");
+        console.log(
+          "Event: seeked. Drawing new frame. Current time:",
+          video.currentTime
+        );
         drawFrameToCanvas();
-        const newFrameNumber = Math.floor(videoRef.current!.currentTime * FPS);
+        const newFrameNumber = Math.floor(video.currentTime * FPS);
         setFrameDrawingHistory((prevMap) => {
           const newMap = new Map(prevMap);
           let frameEntry = newMap.get(newFrameNumber);
@@ -259,7 +316,7 @@ export default function VideoFrameEditor() {
 
       const handleError = (e: Event) => {
         console.error("Video error:", video.error);
-        setIsLoadingVideo(false);
+        setIsLoadingVideo(false); // Ensure loading state is cleared on error
       };
 
       video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -267,6 +324,9 @@ export default function VideoFrameEditor() {
       video.addEventListener("seeked", handleSeeked);
       video.addEventListener("error", handleError);
       video.addEventListener("ended", handleEnded);
+
+      // Initial check in case video is already loaded by the time component mounts
+      checkVideoReady();
 
       return () => {
         video.removeEventListener("loadedmetadata", handleLoadedMetadata);
@@ -579,7 +639,6 @@ export default function VideoFrameEditor() {
       );
       if (shapeToCopy) {
         setCopiedShapeData(JSON.parse(JSON.stringify(shapeToCopy)));
-        // Update default label and color to the copied shape's properties
         setDefaultShapeLabel(shapeToCopy.label);
         setDefaultShapeColor(shapeToCopy.color);
         console.log("Shape copied:", shapeToCopy);
@@ -661,17 +720,15 @@ export default function VideoFrameEditor() {
     [selectedShapeId, addFrameShapeSnapshot]
   );
 
-  // New: Unified handler for setting drawing tool and resetting defaults
   const handleSetDrawingTool = useCallback(
     (tool: "polygon" | "rectangle" | "circle") => {
       if (drawingTool !== tool) {
-        // Only reset if changing to a different tool type
         setDefaultShapeLabel("New Shape");
         setDefaultShapeColor("#FF0000");
       }
       setDrawingTool(tool);
     },
-    [drawingTool] // Dependency on drawingTool to check for change
+    [drawingTool]
   );
 
   useEffect(() => {
@@ -790,7 +847,7 @@ export default function VideoFrameEditor() {
             )}
           </div>
 
-          {1 > 0 && (
+          {videoDuration > 0 && (
             <div className="w-full space-y-4">
               <div className="flex items-center gap-4">
                 <Label htmlFor="frame-slider" className="min-w-[80px]">
