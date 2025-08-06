@@ -15,9 +15,14 @@ import type {
   CircleShape,
 } from "@/types/drawing";
 import { v4 as uuidv4 } from "uuid"; // For unique IDs
+
 const KonvaElements = dynamic(() => import("@/components/konva-elements"), {
   ssr: false,
 });
+const FrameBar = dynamic(() => import("@/components/frame-bar"), {
+  ssr: false,
+});
+
 export default function VideoFrameEditor() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,23 +37,28 @@ export default function VideoFrameEditor() {
   });
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true); // Start as true
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false); // This should be the single source of truth for playback
   const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0);
+
   const [toolMode, setToolMode] = useState<"draw" | "select">("draw");
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [copiedShapeData, setCopiedShapeData] = useState<ShapeData | null>(
     null
   );
+
   const [defaultShapeLabel, setDefaultShapeLabel] =
     useState<string>("New Shape");
   const [defaultShapeColor, setDefaultShapeColor] = useState<string>("#FF0000");
+
   // New local state for editing selected shape's label and color
   const [editingShapeLabel, setEditingShapeLabel] = useState<string>("");
   const [editingShapeColor, setEditingShapeColor] = useState<string>("");
+
   const [drawingTool, setDrawingTool] = useState<
     "polygon" | "rectangle" | "circle"
   >("polygon");
   const [currentFrameShapes, setCurrentFrameShapes] = useState<ShapeData[]>([]);
+
   interface FrameHistoryEntry {
     history: ShapeData[][];
     currentIndex: number;
@@ -56,18 +66,24 @@ export default function VideoFrameEditor() {
   const [frameDrawingHistory, setFrameDrawingHistory] = useState<
     Map<number, FrameHistoryEntry>
   >(new Map());
+
   const [activePolygonPoints, setActivePolygonPoints] = useState<Point[]>([]);
   const [activePolygonHistory, setActivePolygonHistory] = useState<Point[][]>([
     [],
   ]);
   const [activePolygonHistoryIndex, setActivePolygonHistoryIndex] = useState(0);
+
   const [tempShapeStartPoint, setTempShapeStartPoint] = useState<Point | null>(
     null
   );
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null);
+
   const FPS = 30;
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
+  const totalFrames = Math.floor(videoDuration * FPS);
+  const [frameThumbnails, setFrameThumbnails] = useState<string[]>([]);
+
   const addFrameShapeSnapshot = useCallback(
     (shapes: ShapeData[]) => {
       setFrameDrawingHistory((prevMap) => {
@@ -76,11 +92,13 @@ export default function VideoFrameEditor() {
           history: [[]],
           currentIndex: 0,
         };
+
         const newHistory = currentEntry.history.slice(
           0,
           currentEntry.currentIndex + 1
         );
         newHistory.push(shapes);
+
         newMap.set(currentFrameNumber, {
           history: newHistory,
           currentIndex: newHistory.length - 1,
@@ -90,6 +108,7 @@ export default function VideoFrameEditor() {
     },
     [currentFrameNumber]
   );
+
   const saveCurrentFrameShapes = useCallback(() => {
     const shapesToSave = [...currentFrameShapes];
     if (activePolygonPoints.length > 0) {
@@ -110,6 +129,7 @@ export default function VideoFrameEditor() {
     defaultShapeLabel,
     defaultShapeColor,
   ]);
+
   useEffect(() => {
     const frameEntry = frameDrawingHistory.get(currentFrameNumber);
     if (frameEntry) {
@@ -125,6 +145,7 @@ export default function VideoFrameEditor() {
     setTempShapeCurrentPoint(null);
     setSelectedShapeId(null);
   }, [currentFrameNumber, frameDrawingHistory, addFrameShapeSnapshot]);
+
   // Effect to synchronize editingShapeLabel/Color with selectedShape
   const selectedShape = currentFrameShapes.find(
     (s) => s.id === selectedShapeId
@@ -138,6 +159,7 @@ export default function VideoFrameEditor() {
       setEditingShapeColor("");
     }
   }, [selectedShape]); // Depend on selectedShape object reference
+
   const drawFrameToCanvas = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -175,7 +197,9 @@ export default function VideoFrameEditor() {
       }
     }
   }, []);
+
   const animationFrameId = useRef<number | null>(null);
+
   const animate = useCallback(() => {
     if (!videoRef.current || !isPlaying) {
       if (animationFrameId.current) {
@@ -184,22 +208,29 @@ export default function VideoFrameEditor() {
       }
       return;
     }
+
     const newCurrentTime = videoRef.current.currentTime;
     setCurrentFrameTime(newCurrentTime);
     drawFrameToCanvas();
+
     const newFrameNumber = Math.floor(newCurrentTime * FPS);
+
     setFrameDrawingHistory((prevMap) => {
       const newMap = new Map(prevMap);
       let frameEntry = newMap.get(newFrameNumber);
+
       if (!frameEntry) {
         frameEntry = { history: [[]], currentIndex: 0 };
         newMap.set(newFrameNumber, frameEntry);
       }
+
       setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
       return newMap;
     });
+
     animationFrameId.current = requestAnimationFrame(animate);
   }, [isPlaying, drawFrameToCanvas, FPS]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
@@ -221,6 +252,7 @@ export default function VideoFrameEditor() {
       }
     };
   }, [isPlaying, animate, videoPlaybackRate]);
+
   const handleEnded = useCallback(() => {
     setIsPlaying(false);
     if (videoRef.current) {
@@ -228,15 +260,80 @@ export default function VideoFrameEditor() {
       setCurrentFrameTime(0);
     }
   }, []);
+
+  const generateThumbnails = useCallback(async () => {
+    const video = videoRef.current;
+    const tempCanvas = document.createElement("canvas");
+    const tempCtx = tempCanvas.getContext("2d");
+
+    if (!video || !tempCtx || video.duration === 0 || totalFrames === 0) {
+      console.warn("Video not ready for thumbnail generation or no frames.");
+      return;
+    }
+
+    const thumbnails: string[] = [];
+    const originalTime = video.currentTime; // Store original time to restore later
+
+    // Ensure video is paused before starting thumbnail generation
+    video.pause();
+    console.log("generateThumbnails: Video paused before generation loop.");
+
+    tempCanvas.width = video.videoWidth;
+    tempCanvas.height = video.videoHeight;
+
+    console.log(`Starting thumbnail generation for ${totalFrames} frames...`);
+
+    const promises = [];
+    for (let i = 0; i < totalFrames; i++) {
+      const frameTime = i / FPS;
+      promises.push(
+        new Promise<void>((resolve) => {
+          const onSeeked = () => {
+            video.removeEventListener("seeked", onSeeked);
+            if (video.readyState >= 2) {
+              tempCtx.drawImage(
+                video,
+                0,
+                0,
+                tempCanvas.width,
+                tempCanvas.height
+              );
+              thumbnails.push(tempCanvas.toDataURL("image/jpeg", 0.7));
+            } else {
+              thumbnails.push("/placeholder.svg?height=10&width=16");
+            }
+            resolve();
+          };
+          video.addEventListener("seeked", onSeeked);
+          video.currentTime = frameTime;
+        })
+      );
+    }
+
+    await Promise.all(promises);
+
+    setFrameThumbnails(thumbnails);
+    video.currentTime = originalTime;
+    video.pause();
+    console.log("Thumbnails generation complete. Total:", thumbnails.length);
+  }, [totalFrames, FPS]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
+      video.autoplay = false; // Explicitly disable autoplay
+      // video.load(); // Removed: Let checkVideoReady handle initial load state
+
       const checkVideoReady = () => {
         if (
           video.readyState >= 2 &&
           video.videoWidth > 0 &&
           video.duration > 0
         ) {
+          console.log(
+            "checkVideoReady: Video fully ready. Pausing and drawing initial frame."
+          );
+          video.pause(); // Ensure it's paused immediately
           drawFrameToCanvas();
           setVideoDuration(video.duration);
           setVideoDimensions({
@@ -252,6 +349,8 @@ export default function VideoFrameEditor() {
             video.videoWidth,
             video.videoHeight
           );
+          // Generate thumbnails once video is fully loaded and paused
+          generateThumbnails();
         } else {
           console.log(
             "checkVideoReady: Video not fully ready yet. Scheduling retry. ReadyState:",
@@ -266,6 +365,7 @@ export default function VideoFrameEditor() {
           setTimeout(checkVideoReady, 100);
         }
       };
+
       const handleLoadedMetadata = () => {
         console.log(
           "Event: loadedmetadata. Video Width:",
@@ -277,10 +377,12 @@ export default function VideoFrameEditor() {
         );
         checkVideoReady(); // Attempt to set ready state and draw
       };
+
       const handleLoadedData = () => {
         console.log("Event: loadeddata. Attempting to draw initial frame.");
         checkVideoReady(); // Attempt to set ready state and draw
       };
+
       const handleSeeked = () => {
         console.log(
           "Event: seeked. Drawing new frame. Current time:",
@@ -299,17 +401,22 @@ export default function VideoFrameEditor() {
           return newMap;
         });
       };
+
       const handleError = (e: Event) => {
         console.error("Video error:", video.error);
         setIsLoadingVideo(false); // Ensure loading state is cleared on error
       };
+
       video.addEventListener("loadedmetadata", handleLoadedMetadata);
       video.addEventListener("loadeddata", handleLoadedData);
       video.addEventListener("seeked", handleSeeked);
       video.addEventListener("error", handleError);
       video.addEventListener("ended", handleEnded);
-      // Initial check in case video is already loaded by the time component mounts
+
+      // Initial check and load
+      video.load(); // Explicitly call load here
       checkVideoReady();
+
       return () => {
         video.removeEventListener("loadedmetadata", handleLoadedMetadata);
         video.removeEventListener("loadeddata", handleLoadedData);
@@ -318,11 +425,19 @@ export default function VideoFrameEditor() {
         video.removeEventListener("ended", handleEnded);
       };
     }
-  }, [drawFrameToCanvas, handleEnded, FPS]);
+  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]);
+
   const handlePlayPauseToggle = () => {
+    console.log(
+      "handlePlayPauseToggle: Toggling isPlaying from",
+      isPlaying,
+      "to",
+      !isPlaying
+    );
     saveCurrentFrameShapes();
     setIsPlaying((prev) => !prev);
   };
+
   const handleSliderChange = (value: number[]) => {
     if (isPlaying) return;
     const newTime = value[0];
@@ -344,6 +459,7 @@ export default function VideoFrameEditor() {
       drawFrameToCanvas();
     }
   };
+
   const handleNextFrame = () => {
     if (isPlaying) return;
     if (videoRef.current) {
@@ -365,6 +481,7 @@ export default function VideoFrameEditor() {
       drawFrameToCanvas();
     }
   };
+
   const handlePrevFrame = () => {
     if (isPlaying) return;
     if (videoRef.current) {
@@ -386,13 +503,17 @@ export default function VideoFrameEditor() {
       drawFrameToCanvas();
     }
   };
+
   const handleStageClick = (e: any) => {
     if (isPlaying) return;
+
     if (toolMode === "draw") {
       const stage = e.target.getStage();
       const pointerPosition = stage.getPointerPosition();
       if (!pointerPosition) return;
+
       const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
+
       if (drawingTool === "polygon") {
         const newPoints = [...activePolygonPoints, newPoint];
         const newHistory = activePolygonHistory.slice(
@@ -457,6 +578,7 @@ export default function VideoFrameEditor() {
       }
     }
   };
+
   const handleStageMouseMove = (e: any) => {
     if (
       !isDrawingMode ||
@@ -465,12 +587,14 @@ export default function VideoFrameEditor() {
       isPlaying
     )
       return;
+
     const stage = e.target.getStage();
     const pointerPosition = stage.getPointerPosition();
     if (pointerPosition) {
       setTempShapeCurrentPoint({ x: pointerPosition.x, y: pointerPosition.y });
     }
   };
+
   const handleShapeClick = useCallback(
     (shapeId: string) => {
       if (toolMode === "select" && !isPlaying) {
@@ -479,9 +603,11 @@ export default function VideoFrameEditor() {
     },
     [toolMode, isPlaying]
   );
+
   const handleShapeDragEnd = useCallback(
     (shapeId: string, newX: number, newY: number, type: ShapeData["type"]) => {
       if (isPlaying) return;
+
       setCurrentFrameShapes((prevShapes) => {
         const updatedShapes = prevShapes.map((shape) => {
           if (shape.id === shapeId) {
@@ -491,8 +617,10 @@ export default function VideoFrameEditor() {
               ) as PolygonShape;
               if (!originalShape || originalShape.points.length === 0)
                 return shape;
+
               const deltaX = newX - originalShape.points[0].x;
               const deltaY = newY - originalShape.points[0].y;
+
               return {
                 ...shape,
                 points: (shape as PolygonShape).points.map((p) => ({
@@ -514,6 +642,7 @@ export default function VideoFrameEditor() {
     },
     [isPlaying, addFrameShapeSnapshot]
   );
+
   // New: Handle shape transform end (for rectangles and circles)
   const handleShapeTransformEnd = useCallback(
     (
@@ -528,6 +657,7 @@ export default function VideoFrameEditor() {
       type: ShapeData["type"]
     ) => {
       if (isPlaying) return;
+
       setCurrentFrameShapes((prevShapes) => {
         const updatedShapes = prevShapes.map((shape) => {
           if (shape.id === shapeId) {
@@ -556,10 +686,12 @@ export default function VideoFrameEditor() {
     },
     [isPlaying, addFrameShapeSnapshot]
   );
+
   // New: Handle polygon point drag end
   const handlePolygonPointDragEnd = useCallback(
     (polygonId: string, pointIndex: number, newX: number, newY: number) => {
       if (isPlaying) return;
+
       setCurrentFrameShapes((prevShapes) => {
         const updatedShapes = prevShapes.map((shape) => {
           if (shape.id === polygonId && shape.type === "polygon") {
@@ -575,6 +707,7 @@ export default function VideoFrameEditor() {
     },
     [isPlaying, addFrameShapeSnapshot]
   );
+
   const handleUndoPolygon = () => {
     if (activePolygonHistoryIndex > 0) {
       const newIndex = activePolygonHistoryIndex - 1;
@@ -582,6 +715,7 @@ export default function VideoFrameEditor() {
       setActivePolygonPoints(activePolygonHistory[newIndex]);
     }
   };
+
   const handleRedoPolygon = () => {
     if (activePolygonHistoryIndex < activePolygonHistory.length - 1) {
       const newIndex = activePolygonHistoryIndex + 1;
@@ -589,6 +723,7 @@ export default function VideoFrameEditor() {
       setActivePolygonPoints(activePolygonHistory[newIndex]);
     }
   };
+
   const handleUndoShapeAction = () => {
     setFrameDrawingHistory((prevMap) => {
       const newMap = new Map(prevMap);
@@ -605,6 +740,7 @@ export default function VideoFrameEditor() {
       return newMap;
     });
   };
+
   const handleRedoShapeAction = () => {
     setFrameDrawingHistory((prevMap) => {
       const newMap = new Map(prevMap);
@@ -624,6 +760,7 @@ export default function VideoFrameEditor() {
       return newMap;
     });
   };
+
   const handleClearDrawing = () => {
     setCurrentFrameShapes([]);
     setActivePolygonPoints([]);
@@ -634,6 +771,7 @@ export default function VideoFrameEditor() {
     addFrameShapeSnapshot([]);
     setSelectedShapeId(null);
   };
+
   const handleClosePolygon = () => {
     if (activePolygonPoints.length >= 3) {
       const closedPolygon: PolygonShape = {
@@ -654,6 +792,7 @@ export default function VideoFrameEditor() {
       setActivePolygonHistoryIndex(0);
     }
   };
+
   const handleCopyShape = useCallback(() => {
     if (selectedShapeId) {
       const shapeToCopy = currentFrameShapes.find(
@@ -667,10 +806,12 @@ export default function VideoFrameEditor() {
       }
     }
   }, [selectedShapeId, currentFrameShapes]);
+
   const handlePasteShape = useCallback(() => {
     if (copiedShapeData) {
       const newShapeId = uuidv4();
       let pastedShape: ShapeData;
+
       if (copiedShapeData.type === "polygon") {
         pastedShape = {
           ...copiedShapeData,
@@ -697,6 +838,7 @@ export default function VideoFrameEditor() {
       } else {
         return;
       }
+
       setCurrentFrameShapes((prevShapes) => {
         const updatedShapes = [...prevShapes, pastedShape];
         addFrameShapeSnapshot(updatedShapes);
@@ -706,6 +848,7 @@ export default function VideoFrameEditor() {
       console.log("Shape pasted:", pastedShape);
     }
   }, [copiedShapeData, addFrameShapeSnapshot]);
+
   const handleDeleteShape = useCallback(() => {
     if (selectedShapeId) {
       setCurrentFrameShapes((prevShapes) => {
@@ -719,6 +862,7 @@ export default function VideoFrameEditor() {
       setCopiedShapeData(null); // Clear copied shape if it was the one deleted
     }
   }, [selectedShapeId, addFrameShapeSnapshot]);
+
   // New: Handle input change for label (updates local state only)
   const handleLabelInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -726,6 +870,7 @@ export default function VideoFrameEditor() {
     },
     []
   );
+
   // New: Handle blur for label (commits change to main state and history)
   const handleLabelBlur = useCallback(() => {
     if (
@@ -749,6 +894,7 @@ export default function VideoFrameEditor() {
     editingShapeLabel,
     addFrameShapeSnapshot,
   ]);
+
   // New: Handle input change for color (updates local state and commits change)
   const handleColorInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -756,6 +902,7 @@ export default function VideoFrameEditor() {
     },
     []
   );
+
   const handleColorBlur = useCallback(() => {
     if (
       selectedShapeId &&
@@ -778,6 +925,7 @@ export default function VideoFrameEditor() {
     editingShapeColor,
     addFrameShapeSnapshot,
   ]);
+
   const handleSetDrawingTool = useCallback(
     (tool: "polygon" | "rectangle" | "circle") => {
       if (drawingTool !== tool) {
@@ -788,6 +936,7 @@ export default function VideoFrameEditor() {
     },
     [drawingTool]
   );
+
   useEffect(() => {
     setTempShapeStartPoint(null);
     setTempShapeCurrentPoint(null);
@@ -817,6 +966,7 @@ export default function VideoFrameEditor() {
     defaultShapeLabel,
     defaultShapeColor,
   ]);
+
   useEffect(() => {
     if (isDrawingMode) {
       setToolMode("draw");
@@ -829,6 +979,7 @@ export default function VideoFrameEditor() {
       setActivePolygonHistoryIndex(0);
     }
   }, [isDrawingMode]);
+
   const currentFrameDrawingEntry = frameDrawingHistory.get(currentFrameNumber);
   const canUndoShape =
     currentFrameDrawingEntry && currentFrameDrawingEntry.currentIndex > 0;
@@ -836,9 +987,27 @@ export default function VideoFrameEditor() {
     currentFrameDrawingEntry &&
     currentFrameDrawingEntry.currentIndex <
       currentFrameDrawingEntry.history.length - 1;
+
   const isSelectMode = toolMode === "select";
   const isDrawMode = toolMode === "draw";
-  // selectedShape is already defined above the useEffect for editingShapeLabel/Color
+
+  // New: Handle frame selection from the FrameBar
+  const handleFrameSelect = useCallback(
+    (frameNumber: number) => {
+      if (isPlaying) return; // Prevent frame changes during playback
+
+      saveCurrentFrameShapes(); // Save current frame's shapes before switching
+
+      const newTime = frameNumber / FPS;
+      if (videoRef.current) {
+        videoRef.current.currentTime = newTime;
+        setCurrentFrameTime(newTime);
+        // The useEffect for currentFrameNumber will handle loading shapes for the new frame
+      }
+    },
+    [isPlaying, FPS, saveCurrentFrameShapes]
+  );
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
       <Card className="w-full max-w-4xl shadow-lg">
@@ -855,15 +1024,18 @@ export default function VideoFrameEditor() {
             <video
               ref={videoRef}
               src="/placeholder.mp4"
-              preload="auto"
               muted
               crossOrigin="anonymous"
               className="hidden"
+              preload="auto"
+              autoPlay={false}
             >
               Your browser does not support the video tag.
             </video>
+
             {/* Canvas for drawing video frames */}
             <canvas ref={canvasRef} className="hidden" />
+
             {/* Konva Stage for displaying image and drawing */}
             {isLoadingVideo ? (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
@@ -896,6 +1068,7 @@ export default function VideoFrameEditor() {
               </div>
             )}
           </div>
+
           {videoDuration > 0 && (
             <div className="w-full space-y-4">
               <div className="flex items-center gap-4">
@@ -948,6 +1121,7 @@ export default function VideoFrameEditor() {
               </div>
             </div>
           )}
+
           <div className="flex flex-col sm:flex-row justify-center gap-4">
             <Button
               onClick={() => setIsDrawingMode(!isDrawingMode)}
@@ -979,6 +1153,7 @@ export default function VideoFrameEditor() {
               Close Polygon
             </Button>
           </div>
+
           {isDrawMode && (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border rounded-lg bg-gray-50">
@@ -1003,6 +1178,7 @@ export default function VideoFrameEditor() {
                   />
                 </div>
               </div>
+
               {drawingTool === "polygon" && (
                 <div className="flex justify-center gap-2 mt-2">
                   <Button
@@ -1022,6 +1198,7 @@ export default function VideoFrameEditor() {
                   </Button>
                 </div>
               )}
+
               <div className="flex flex-col sm:flex-row justify-center gap-2 mt-4">
                 <Button
                   onClick={() => handleSetDrawingTool("polygon")}
@@ -1049,6 +1226,7 @@ export default function VideoFrameEditor() {
               </div>
             </>
           )}
+
           <div className="flex justify-center gap-2 mt-2">
             <Button
               onClick={handleUndoShapeAction}
@@ -1063,6 +1241,7 @@ export default function VideoFrameEditor() {
               Redo Shape Action
             </Button>
           </div>
+
           {isSelectMode && (
             <div className="flex flex-col gap-4 mt-4">
               <div className="flex justify-center gap-2">
@@ -1085,6 +1264,7 @@ export default function VideoFrameEditor() {
                   Delete Selected Shape
                 </Button>
               </div>
+
               {selectedShape && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border rounded-lg bg-gray-50">
                   <div className="space-y-2">
@@ -1115,6 +1295,18 @@ export default function VideoFrameEditor() {
           )}
         </CardContent>
       </Card>
+
+      {/* New Frame Bar Component */}
+      {!isLoadingVideo && videoDuration > 0 && (
+        <div className="w-full max-w-4xl mt-4">
+          <FrameBar
+            totalFrames={totalFrames}
+            currentFrameNumber={currentFrameNumber}
+            frameThumbnails={frameThumbnails}
+            onFrameSelect={handleFrameSelect}
+          />
+        </div>
+      )}
     </div>
   );
 }
