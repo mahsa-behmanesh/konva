@@ -547,6 +547,71 @@ export default function VideoFrameEditor() {
     [isPlaying, addFrameShapeSnapshot]
   );
 
+  // New: Handle shape transform end (for rectangles and circles)
+  const handleShapeTransformEnd = useCallback(
+    (
+      shapeId: string,
+      newAttrs: {
+        x: number;
+        y: number;
+        width?: number;
+        height?: number;
+        radius?: number;
+      },
+      type: ShapeData["type"]
+    ) => {
+      if (isPlaying) return;
+
+      setCurrentFrameShapes((prevShapes) => {
+        const updatedShapes = prevShapes.map((shape) => {
+          if (shape.id === shapeId) {
+            if (type === "rectangle") {
+              return {
+                ...shape,
+                x: newAttrs.x,
+                y: newAttrs.y,
+                width: newAttrs.width,
+                height: newAttrs.height,
+              } as RectangleShape;
+            } else if (type === "circle") {
+              return {
+                ...shape,
+                x: newAttrs.x,
+                y: newAttrs.y,
+                radius: newAttrs.radius,
+              } as CircleShape;
+            }
+          }
+          return shape;
+        });
+        addFrameShapeSnapshot(updatedShapes);
+        return updatedShapes;
+      });
+    },
+    [isPlaying, addFrameShapeSnapshot]
+  );
+
+  // New: Handle polygon point drag end
+  const handlePolygonPointDragEnd = useCallback(
+    (polygonId: string, pointIndex: number, newX: number, newY: number) => {
+      if (isPlaying) return;
+
+      setCurrentFrameShapes((prevShapes) => {
+        const updatedShapes = prevShapes.map((shape) => {
+          if (shape.id === polygonId && shape.type === "polygon") {
+            const newPoints = [...(shape as PolygonShape).points];
+            newPoints[pointIndex] = { x: newX, y: newY };
+            return { ...shape, points: newPoints } as PolygonShape;
+          }
+          return shape;
+        });
+        addFrameShapeSnapshot(updatedShapes);
+        return updatedShapes;
+      });
+    },
+    [isPlaying, addFrameShapeSnapshot]
+  );
+
   const handleUndoPolygon = () => {
     if (activePolygonHistoryIndex > 0) {
       const newIndex = activePolygonHistoryIndex - 1;
@@ -839,6 +904,8 @@ export default function VideoFrameEditor() {
                 onStageMouseMove={handleStageMouseMove}
                 onShapeClick={handleShapeClick}
                 onShapeDragEnd={handleShapeDragEnd}
+                onShapeTransformEnd={handleShapeTransformEnd} // Pass new handler
+                onPolygonPointDragEnd={handlePolygonPointDragEnd} // Pass new handler
               />
             ) : (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
