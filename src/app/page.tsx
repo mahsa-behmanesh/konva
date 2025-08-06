@@ -79,7 +79,7 @@ export default function VideoFrameEditor() {
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null);
 
-  const [FPS, setFPS] = useState(10);
+  const [FPS, setFPS] = useState(30); // Now a state variable
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
   const totalFrames = Math.floor(videoDuration * FPS);
   const [frameThumbnails, setFrameThumbnails] = useState<string[]>([]);
@@ -263,47 +263,44 @@ export default function VideoFrameEditor() {
 
   const generateThumbnails = useCallback(async () => {
     const video = videoRef.current;
-    const tempCanvas = document.createElement("canvas");
-    const tempCtx = tempCanvas.getContext("2d");
+    if (!video) {
+      return;
+    }
 
-    if (!video || !tempCtx || video.duration === 0 || totalFrames === 0) {
-      console.warn("Video not ready for thumbnail generation or no frames.");
+    const tempCanvas = document.createElement("canvas");
+    const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
+    if (!tempCtx) {
+      console.error("Could not get canvas context.");
       return;
     }
 
     const thumbnails: string[] = [];
-    const originalTime = video.currentTime; // Store original time to restore later
-
-    // Ensure video is paused before starting thumbnail generation
+    const originalTime = video.currentTime;
     video.pause();
-    console.log("generateThumbnails: Video paused before generation loop.");
 
-    // Set canvas dimensions for thumbnails (e.g., 100x100 pixels)
     const THUMBNAIL_WIDTH = 100;
     const THUMBNAIL_HEIGHT = 100;
     tempCanvas.width = THUMBNAIL_WIDTH;
     tempCanvas.height = THUMBNAIL_HEIGHT;
 
-    console.log(`Starting thumbnail generation for ${totalFrames} frames...`);
+    console.log(
+      `Starting parallel thumbnail generation for ${totalFrames} frames...`
+    );
 
-    const promises = [];
+    const thumbnailPromises = [];
+
     for (let i = 0; i < totalFrames; i++) {
       const frameTime = i / FPS;
-      promises.push(
+      thumbnailPromises.push(
         new Promise<void>((resolve) => {
           const onSeeked = () => {
             video.removeEventListener("seeked", onSeeked);
+
             if (video.readyState >= 2) {
-              tempCtx.drawImage(
-                video,
-                0,
-                0,
-                tempCanvas.width,
-                tempCanvas.height
-              );
-              thumbnails.push(tempCanvas.toDataURL("image/jpeg", 0.7));
+              tempCtx.drawImage(video, 0, 0, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+              thumbnails[i] = tempCanvas.toDataURL("image/jpeg", 0.7);
             } else {
-              thumbnails.push("/placeholder.svg?height=10&width=16");
+              thumbnails[i] = "/placeholder.svg?height=100&width=100";
             }
             resolve();
           };
@@ -313,133 +310,76 @@ export default function VideoFrameEditor() {
       );
     }
 
-    await Promise.all(promises);
+    await Promise.all(thumbnailPromises);
 
     setFrameThumbnails(thumbnails);
-    video.currentTime = originalTime; // Restore original video time
-    video.pause(); // Ensure video remains paused after generation
+    video.currentTime = originalTime;
+    video.pause();
     console.log("Thumbnails generation complete. Total:", thumbnails.length);
-  }, [totalFrames, FPS]); // Depend on FPS
+  }, [totalFrames, FPS]);
 
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (video) {
-      video.autoplay = false; // Explicitly disable autoplay
-      // Change preload to metadata to prevent full video loading on mount
-      video.setAttribute("preload", "metadata");
+    if (!video) return;
 
-      const checkVideoReady = () => {
-        if (
-          video.readyState >= 2 &&
-          video.videoWidth > 0 &&
-          video.duration > 0
-        ) {
-          console.log(
-            "checkVideoReady: Video fully ready. Pausing and drawing initial frame."
-          );
-          video.pause(); // Ensure it's paused immediately
-          drawFrameToCanvas();
-          setVideoDuration(video.duration);
-          setVideoDimensions({
-            width: video.videoWidth,
-            height: video.videoHeight,
-          });
-          setCurrentFrameTime(0); // Ensure it starts at 0
-          setIsLoadingVideo(false);
-          console.log(
-            "checkVideoReady: Video fully ready and loaded. Duration:",
-            video.duration,
-            "Dimensions:",
-            video.videoWidth,
-            video.videoHeight
-          );
-          // Debounce thumbnail generation
-          if (debounceTimeoutRef.current) {
-            clearTimeout(debounceTimeoutRef.current);
-          }
-          debounceTimeoutRef.current = setTimeout(() => {
-            generateThumbnails();
-          }, 500); // Debounce for 500ms
-        } else {
-          console.log(
-            "checkVideoReady: Video not fully ready yet. Scheduling retry. ReadyState:",
-            video.readyState,
-            "Dimensions:",
-            video.videoWidth,
-            video.videoHeight,
-            "Duration:",
-            video.duration
-          );
-          // Retry after a short delay if not fully ready
-          setTimeout(checkVideoReady, 100);
-        }
-      };
+    video.autoplay = false;
+    video.setAttribute("preload", "metadata");
 
-      const handleLoadedMetadata = () => {
-        console.log(
-          "Event: loadedmetadata. Video Width:",
-          video.videoWidth,
-          "Video Height:",
-          video.videoHeight,
-          "Duration:",
-          video.duration
-        );
-        checkVideoReady(); // Attempt to set ready state and draw
-      };
+    // This is the core change: use loadeddata as the primary trigger
+    const handleLoadedData = () => {
+      console.log("Event: loadeddata. Video is ready for drawing.");
+      video.pause(); // Ensure it's paused
+      drawFrameToCanvas();
+      setVideoDuration(video.duration);
+      setVideoDimensions({
+        width: video.videoWidth,
+        height: video.videoHeight,
+      });
+      setCurrentFrameTime(0);
+      setIsLoadingVideo(false);
 
-      const handleLoadedData = () => {
-        console.log("Event: loadeddata. Attempting to draw initial frame.");
-        checkVideoReady(); // Attempt to set ready state and draw
-      };
+      // Call generateThumbnails only after the video is loaded and paused
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      debounceTimeoutRef.current = setTimeout(() => {
+        generateThumbnails();
+      }, 500);
+    };
 
-      const handleSeeked = () => {
-        console.log(
-          "Event: seeked. Drawing new frame. Current time:",
-          video.currentTime
-        );
-        drawFrameToCanvas();
-        const newFrameNumber = Math.floor(video.currentTime * FPS); // Use FPS here
-        setFrameDrawingHistory((prevMap) => {
-          const newMap = new Map(prevMap);
-          let frameEntry = newMap.get(newFrameNumber);
-          if (!frameEntry) {
-            frameEntry = { history: [[]], currentIndex: 0 };
-            newMap.set(newFrameNumber, frameEntry);
-          }
-          setCurrentFrameShapes(frameEntry.history[frameEntry.currentIndex]);
-          return newMap;
-        });
-      };
+    const handleSeeked = () => {
+      console.log(
+        "Event: seeked. Drawing new frame. Current time:",
+        video.currentTime
+      );
+      drawFrameToCanvas();
+    };
 
-      const handleError = (e: Event) => {
-        console.error("Video error:", video.error);
-        setIsLoadingVideo(false); // Ensure loading state is cleared on error
-      };
+    const handleError = (e: Event) => {
+      console.error("Video error:", video.error);
+      setIsLoadingVideo(false);
+    };
 
-      video.addEventListener("loadedmetadata", handleLoadedMetadata);
-      video.addEventListener("loadeddata", handleLoadedData);
-      video.addEventListener("seeked", handleSeeked);
-      video.addEventListener("error", handleError);
-      video.addEventListener("ended", handleEnded);
+    video.addEventListener("loadeddata", handleLoadedData);
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("error", handleError);
+    video.addEventListener("ended", handleEnded);
 
-      // Initial load and check
-      video.load(); // Explicitly call load here to start loading metadata/data
-      checkVideoReady();
+    // Initial load call
+    video.load();
 
-      return () => {
-        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-        video.removeEventListener("loadeddata", handleLoadedData);
-        video.removeEventListener("seeked", handleSeeked);
-        video.removeEventListener("error", handleError);
-        video.removeEventListener("ended", handleEnded);
-        if (debounceTimeoutRef.current) {
-          clearTimeout(debounceTimeoutRef.current);
-        }
-      };
-    }
-  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]); // Add FPS to dependencies
+    return () => {
+      video.removeEventListener("loadeddata", handleLoadedData);
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+      video.removeEventListener("ended", handleEnded);
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]);
 
   // Effect to re-generate thumbnails when FPS changes
   useEffect(() => {
@@ -476,7 +416,7 @@ export default function VideoFrameEditor() {
       saveCurrentFrameShapes();
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS);
+      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -495,10 +435,10 @@ export default function VideoFrameEditor() {
     if (isPlaying) return;
     if (videoRef.current) {
       saveCurrentFrameShapes();
-      const newTime = Math.min(videoDuration, currentFrameTime + 1 / FPS);
+      const newTime = Math.min(videoDuration, currentFrameTime + 1 / FPS); // Use FPS here
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS);
+      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -517,10 +457,10 @@ export default function VideoFrameEditor() {
     if (isPlaying) return;
     if (videoRef.current) {
       saveCurrentFrameShapes();
-      const newTime = Math.max(0, currentFrameTime - 1 / FPS);
+      const newTime = Math.max(0, currentFrameTime - 1 / FPS); // Use FPS here
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS);
+      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -1029,7 +969,7 @@ export default function VideoFrameEditor() {
 
       saveCurrentFrameShapes(); // Save current frame's shapes before switching
 
-      const newTime = frameNumber / FPS;
+      const newTime = frameNumber / FPS; // Use FPS here
       if (videoRef.current) {
         videoRef.current.currentTime = newTime;
         setCurrentFrameTime(newTime);
@@ -1067,7 +1007,7 @@ export default function VideoFrameEditor() {
               muted
               crossOrigin="anonymous"
               className="hidden"
-              preload="auto"
+              preload="metadata" // Changed from "auto" to "metadata"
               autoPlay={false}
             >
               Your browser does not support the video tag.
@@ -1161,7 +1101,7 @@ export default function VideoFrameEditor() {
               </div>
               <div className="flex items-center gap-4">
                 <Label htmlFor="fps-input" className="min-w-[120px]">
-                  Enter FPS:
+                  Custom FPS:
                 </Label>
                 <Input
                   id="fps-input"
