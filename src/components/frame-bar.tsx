@@ -59,7 +59,7 @@ export default function FrameBar({
           >
             {frameThumbnails[frameNumber] ? (
               <Image
-                src={frameThumbnails[frameNumber] || "/placeholder.svg"}
+                src={frameThumbnails[frameNumber]}
                 alt={`Frame ${frameNumber}`}
                 width={100}
                 height={100}

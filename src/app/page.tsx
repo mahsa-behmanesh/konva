@@ -820,6 +820,59 @@ export default function VideoFrameEditor() {
     }
   }, [copiedShapeData, addFrameShapeSnapshot]);
 
+  const pasteShapeToRemainingFrames = (forward = true) => {
+    if (!copiedShapeData) return;
+
+    setFrameDrawingHistory((prevMap) => {
+      const newMap = new Map(prevMap);
+      const shapeCopy = {
+        ...copiedShapeData,
+        id: uuidv4(), // جلوگیری از تداخل ID
+      };
+
+      if (forward) {
+        for (let f = currentFrameNumber + 1; f < totalFrames; f++) {
+          const frameEntry = newMap.get(f) || {
+            history: [[]],
+            currentIndex: 0,
+          };
+          const newShapes = [
+            ...frameEntry.history[frameEntry.currentIndex],
+            shapeCopy,
+          ];
+          const newHistory = [
+            ...frameEntry.history.slice(0, frameEntry.currentIndex + 1),
+            newShapes,
+          ];
+          newMap.set(f, {
+            history: newHistory,
+            currentIndex: newHistory.length - 1,
+          });
+        }
+      } else {
+        for (let f = 0; f < currentFrameNumber; f++) {
+          const frameEntry = newMap.get(f) || {
+            history: [[]],
+            currentIndex: 0,
+          };
+          const newShapes = [
+            ...frameEntry.history[frameEntry.currentIndex],
+            shapeCopy,
+          ];
+          const newHistory = [
+            ...frameEntry.history.slice(0, frameEntry.currentIndex + 1),
+            newShapes,
+          ];
+          newMap.set(f, {
+            history: newHistory,
+            currentIndex: newHistory.length - 1,
+          });
+        }
+      }
+      return newMap;
+    });
+  };
+
   const handleDeleteShape = useCallback(() => {
     if (selectedShapeId) {
       setCurrentFrameShapes((prevShapes) => {
@@ -1252,6 +1305,15 @@ export default function VideoFrameEditor() {
                 >
                   Paste Shape
                 </Button>
+
+                <Button onClick={() => pasteShapeToRemainingFrames(false)}>
+                  Paste to Previous Frames
+                </Button>
+
+                <Button onClick={() => pasteShapeToRemainingFrames(true)}>
+                  Paste to Next Frames
+                </Button>
+
                 <Button
                   onClick={handleDeleteShape}
                   disabled={!selectedShapeId || isPlaying}
