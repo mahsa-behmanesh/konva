@@ -14,7 +14,7 @@ import type {
   RectangleShape,
   CircleShape,
 } from "@/types/drawing";
-import { v4 as uuidv4 } from "uuid"; // For unique IDs
+import { v4 as uuidv4 } from "uuid";
 
 const KonvaElements = dynamic(() => import("@/components/konva-elements"), {
   ssr: false,
@@ -36,9 +36,10 @@ export default function VideoFrameEditor() {
     height: 0,
   });
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [isLoadingVideo, setIsLoadingVideo] = useState(true); // Start as true
-  const [isPlaying, setIsPlaying] = useState(false); // This should be the single source of truth for playback
+  const [isLoadingVideo, setIsLoadingVideo] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [videoPlaybackRate, setVideoPlaybackRate] = useState(1.0);
+  const [videoFileURL, setVideoFileURL] = useState<string | null>(null);
 
   const [toolMode, setToolMode] = useState<"draw" | "select">("draw");
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
@@ -50,7 +51,6 @@ export default function VideoFrameEditor() {
     useState<string>("New Shape");
   const [defaultShapeColor, setDefaultShapeColor] = useState<string>("#FF0000");
 
-  // New local state for editing selected shape's label and color
   const [editingShapeLabel, setEditingShapeLabel] = useState<string>("");
   const [editingShapeColor, setEditingShapeColor] = useState<string>("");
 
@@ -79,7 +79,7 @@ export default function VideoFrameEditor() {
   const [tempShapeCurrentPoint, setTempShapeCurrentPoint] =
     useState<Point | null>(null);
 
-  const [FPS, setFPS] = useState(30); // Now a state variable
+  const [FPS, setFPS] = useState(30);
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
   const totalFrames = Math.floor(videoDuration * FPS);
   const [frameThumbnails, setFrameThumbnails] = useState<string[]>([]);
@@ -146,7 +146,6 @@ export default function VideoFrameEditor() {
     setSelectedShapeId(null);
   }, [currentFrameNumber, frameDrawingHistory, addFrameShapeSnapshot]);
 
-  // Effect to synchronize editingShapeLabel/Color with selectedShape
   const selectedShape = currentFrameShapes.find(
     (s) => s.id === selectedShapeId
   );
@@ -158,16 +157,13 @@ export default function VideoFrameEditor() {
       setEditingShapeLabel("");
       setEditingShapeColor("");
     }
-  }, [selectedShape]); // Depend on selectedShape object reference
+  }, [selectedShape]);
 
   const drawFrameToCanvas = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (video && canvas) {
-      if (
-        video.readyState >= 2 /* HTMLMediaElement.HAVE_CURRENT_DATA */ &&
-        video.videoWidth > 0
-      ) {
+      if (video.readyState >= 2 && video.videoWidth > 0) {
         const ctx = canvas.getContext("2d");
         if (ctx) {
           canvas.width = video.videoWidth;
@@ -178,7 +174,6 @@ export default function VideoFrameEditor() {
             width: video.videoWidth,
             height: video.videoHeight,
           });
-          // Only set isLoadingVideo to false if duration is also known
           if (video.duration > 0) {
             setIsLoadingVideo(false);
             console.log(
@@ -274,6 +269,7 @@ export default function VideoFrameEditor() {
       return;
     }
 
+    const THUMBNAIL_COUNT = totalFrames; // Maximum number of thumbnails
     const thumbnails: string[] = [];
     const originalTime = video.currentTime;
     video.pause();
@@ -284,13 +280,14 @@ export default function VideoFrameEditor() {
     tempCanvas.height = THUMBNAIL_HEIGHT;
 
     console.log(
-      `Starting parallel thumbnail generation for ${totalFrames} frames...`
+      `Starting thumbnail generation for ${THUMBNAIL_COUNT} thumbnails...`
     );
 
     const thumbnailPromises = [];
+    const timeStep = videoDuration / (THUMBNAIL_COUNT - 1 || 1); // Evenly distribute thumbnails
 
-    for (let i = 0; i < totalFrames; i++) {
-      const frameTime = i / FPS;
+    for (let i = 0; i < THUMBNAIL_COUNT; i++) {
+      const frameTime = i * timeStep;
       thumbnailPromises.push(
         new Promise<void>((resolve) => {
           const onSeeked = () => {
@@ -316,9 +313,24 @@ export default function VideoFrameEditor() {
     video.currentTime = originalTime;
     video.pause();
     console.log("Thumbnails generation complete. Total:", thumbnails.length);
-  }, [totalFrames, FPS]);
+  }, [videoDuration]);
 
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleVideoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const newURL = URL.createObjectURL(file);
+      setVideoFileURL(newURL);
+      setIsLoadingVideo(true);
+      setCurrentFrameImage(null);
+      setVideoDuration(0);
+      setCurrentFrameTime(0);
+      setFrameThumbnails([]);
+      setFrameDrawingHistory(new Map());
+      setCurrentFrameShapes([]);
+    }
+  };
 
   useEffect(() => {
     const video = videoRef.current;
@@ -327,10 +339,9 @@ export default function VideoFrameEditor() {
     video.autoplay = false;
     video.setAttribute("preload", "metadata");
 
-    // This is the core change: use loadeddata as the primary trigger
     const handleLoadedData = () => {
       console.log("Event: loadeddata. Video is ready for drawing.");
-      video.pause(); // Ensure it's paused
+      video.pause();
       drawFrameToCanvas();
       setVideoDuration(video.duration);
       setVideoDimensions({
@@ -340,7 +351,6 @@ export default function VideoFrameEditor() {
       setCurrentFrameTime(0);
       setIsLoadingVideo(false);
 
-      // Call generateThumbnails only after the video is loaded and paused
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
@@ -367,8 +377,10 @@ export default function VideoFrameEditor() {
     video.addEventListener("error", handleError);
     video.addEventListener("ended", handleEnded);
 
-    // Initial load call
-    video.load();
+    if (videoFileURL) {
+      video.src = videoFileURL;
+      video.load();
+    }
 
     return () => {
       video.removeEventListener("loadeddata", handleLoadedData);
@@ -379,9 +391,16 @@ export default function VideoFrameEditor() {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [drawFrameToCanvas, handleEnded, FPS, generateThumbnails]);
+  }, [drawFrameToCanvas, handleEnded, generateThumbnails, videoFileURL]);
 
-  // Effect to re-generate thumbnails when FPS changes
+  useEffect(() => {
+    return () => {
+      if (videoFileURL) {
+        URL.revokeObjectURL(videoFileURL);
+      }
+    };
+  }, [videoFileURL]);
+
   useEffect(() => {
     if (!isLoadingVideo && videoDuration > 0) {
       if (debounceTimeoutRef.current) {
@@ -389,14 +408,14 @@ export default function VideoFrameEditor() {
       }
       debounceTimeoutRef.current = setTimeout(() => {
         generateThumbnails();
-      }, 500); // Debounce for 500ms
+      }, 500);
     }
     return () => {
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [FPS, isLoadingVideo, videoDuration, generateThumbnails]);
+  }, [isLoadingVideo, videoDuration, generateThumbnails]);
 
   const handlePlayPauseToggle = () => {
     console.log(
@@ -416,7 +435,7 @@ export default function VideoFrameEditor() {
       saveCurrentFrameShapes();
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
+      const newFrameNumber = Math.floor(newTime * FPS);
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -435,10 +454,10 @@ export default function VideoFrameEditor() {
     if (isPlaying) return;
     if (videoRef.current) {
       saveCurrentFrameShapes();
-      const newTime = Math.min(videoDuration, currentFrameTime + 1 / FPS); // Use FPS here
+      const newTime = Math.min(videoDuration, currentFrameTime + 1 / FPS);
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
+      const newFrameNumber = Math.floor(newTime * FPS);
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -457,10 +476,10 @@ export default function VideoFrameEditor() {
     if (isPlaying) return;
     if (videoRef.current) {
       saveCurrentFrameShapes();
-      const newTime = Math.max(0, currentFrameTime - 1 / FPS); // Use FPS here
+      const newTime = Math.max(0, currentFrameTime - 1 / FPS);
       videoRef.current.currentTime = newTime;
       setCurrentFrameTime(newTime);
-      const newFrameNumber = Math.floor(newTime * FPS); // Use FPS here
+      const newFrameNumber = Math.floor(newTime * FPS);
       setFrameDrawingHistory((prevMap) => {
         const newMap = new Map(prevMap);
         let frameEntry = newMap.get(newFrameNumber);
@@ -517,7 +536,6 @@ export default function VideoFrameEditor() {
               color: defaultShapeColor,
             };
           } else if (drawingTool === "circle") {
-            // Corrected radius calculation: distance between start point and newPoint
             const radius = Math.sqrt(
               Math.pow(newPoint.x - tempShapeStartPoint.x, 2) +
                 Math.pow(newPoint.y - tempShapeStartPoint.y, 2)
@@ -614,7 +632,6 @@ export default function VideoFrameEditor() {
     [isPlaying, addFrameShapeSnapshot]
   );
 
-  // New: Handle shape transform end (for rectangles and circles)
   const handleShapeTransformEnd = useCallback(
     (
       shapeId: string,
@@ -658,7 +675,6 @@ export default function VideoFrameEditor() {
     [isPlaying, addFrameShapeSnapshot]
   );
 
-  // New: Handle polygon point drag end
   const handlePolygonPointDragEnd = useCallback(
     (polygonId: string, pointIndex: number, newX: number, newY: number) => {
       if (isPlaying) return;
@@ -827,7 +843,7 @@ export default function VideoFrameEditor() {
       const newMap = new Map(prevMap);
       const shapeCopy = {
         ...copiedShapeData,
-        id: uuidv4(), // جلوگیری از تداخل ID
+        id: uuidv4(),
       };
 
       if (forward) {
@@ -882,12 +898,11 @@ export default function VideoFrameEditor() {
         addFrameShapeSnapshot(updatedShapes);
         return updatedShapes;
       });
-      setSelectedShapeId(null); // Deselect after deleting
-      setCopiedShapeData(null); // Clear copied shape if it was the one deleted
+      setSelectedShapeId(null);
+      setCopiedShapeData(null);
     }
   }, [selectedShapeId, addFrameShapeSnapshot]);
 
-  // New: Handle input change for label (updates local state only)
   const handleLabelInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setEditingShapeLabel(e.target.value);
@@ -895,7 +910,6 @@ export default function VideoFrameEditor() {
     []
   );
 
-  // New: Handle blur for label (commits change to main state and history)
   const handleLabelBlur = useCallback(() => {
     if (
       selectedShapeId &&
@@ -919,7 +933,6 @@ export default function VideoFrameEditor() {
     addFrameShapeSnapshot,
   ]);
 
-  // New: Handle input change for color (updates local state and commits change)
   const handleColorInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setEditingShapeColor(e.target.value);
@@ -1015,18 +1028,16 @@ export default function VideoFrameEditor() {
   const isSelectMode = toolMode === "select";
   const isDrawMode = toolMode === "draw";
 
-  // New: Handle frame selection from the FrameBar
   const handleFrameSelect = useCallback(
     (frameNumber: number) => {
-      if (isPlaying) return; // Prevent frame changes during playback
+      if (isPlaying) return;
 
-      saveCurrentFrameShapes(); // Save current frame's shapes before switching
+      saveCurrentFrameShapes();
 
-      const newTime = frameNumber / FPS; // Use FPS here
+      const newTime = frameNumber / FPS;
       if (videoRef.current) {
         videoRef.current.currentTime = newTime;
         setCurrentFrameTime(newTime);
-        // The useEffect for currentFrameNumber will handle loading shapes for the new frame
       }
     },
     [isPlaying, FPS, saveCurrentFrameShapes]
@@ -1037,7 +1048,7 @@ export default function VideoFrameEditor() {
     if (!isNaN(value) && value > 0) {
       setFPS(value);
     } else if (e.target.value === "") {
-      setFPS(0); // Allow empty input temporarily, but it won't be used for calculations
+      setFPS(0);
     }
   };
 
@@ -1047,32 +1058,39 @@ export default function VideoFrameEditor() {
         <CardHeader>
           <CardTitle>Video Frame Editor</CardTitle>
           <p className="text-sm text-gray-500">
-            Load a video, navigate frame by frame, and draw polygons,
+            Upload a video, navigate frame by frame, and draw polygons,
             rectangles, or circles on the current frame.
           </p>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="video-upload">Upload Video</Label>
+            <Input
+              id="video-upload"
+              type="file"
+              accept="video/*"
+              onChange={handleVideoUpload}
+              className="w-full"
+            />
+          </div>
+
           <div className="flex flex-col items-center space-y-4">
-            {/* Hidden video element used for frame extraction */}
             <video
               ref={videoRef}
-              src="/placeholder.mp4"
               muted
               crossOrigin="anonymous"
               className="hidden"
-              preload="metadata" // Changed from "auto" to "metadata"
+              preload="metadata"
               autoPlay={false}
             >
               Your browser does not support the video tag.
             </video>
 
-            {/* Canvas for drawing video frames */}
             <canvas ref={canvasRef} className="hidden" />
 
-            {/* Konva Stage for displaying image and drawing */}
             {isLoadingVideo ? (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
-                Loading video...
+                {videoFileURL ? "Loading video..." : "Please upload a video."}
               </div>
             ) : currentFrameImage &&
               videoDimensions.width > 0 &&
@@ -1092,8 +1110,8 @@ export default function VideoFrameEditor() {
                 onStageMouseMove={handleStageMouseMove}
                 onShapeClick={handleShapeClick}
                 onShapeDragEnd={handleShapeDragEnd}
-                onShapeTransformEnd={handleShapeTransformEnd} // Pass new handler
-                onPolygonPointDragEnd={handlePolygonPointDragEnd} // Pass new handler
+                onShapeTransformEnd={handleShapeTransformEnd}
+                onPolygonPointDragEnd={handlePolygonPointDragEnd}
               />
             ) : (
               <div className="w-full h-96 bg-gray-200 flex items-center justify-center rounded-lg text-gray-500">
@@ -1159,7 +1177,7 @@ export default function VideoFrameEditor() {
                 <Input
                   id="fps-input"
                   type="number"
-                  value={FPS === 0 ? "" : FPS} // Display empty string if 0
+                  value={FPS === 0 ? "" : FPS}
                   onChange={handleFPSChange}
                   min={1}
                   step={1}
@@ -1328,9 +1346,9 @@ export default function VideoFrameEditor() {
                     <Label htmlFor="shape-label">Selected Shape Label</Label>
                     <Input
                       id="shape-label"
-                      value={editingShapeLabel} // Bind to local state
-                      onChange={handleLabelInputChange} // Update local state
-                      onBlur={handleLabelBlur} // Commit on blur
+                      value={editingShapeLabel}
+                      onChange={handleLabelInputChange}
+                      onBlur={handleLabelBlur}
                       disabled={isPlaying}
                     />
                   </div>
@@ -1339,8 +1357,8 @@ export default function VideoFrameEditor() {
                     <Input
                       id="shape-color"
                       type="color"
-                      value={editingShapeColor} // Bind to local state
-                      onChange={handleColorInputChange} // Update local state and commit
+                      value={editingShapeColor}
+                      onChange={handleColorInputChange}
                       onBlur={handleColorBlur}
                       disabled={isPlaying}
                       className="h-10 w-full"
@@ -1353,7 +1371,6 @@ export default function VideoFrameEditor() {
         </CardContent>
       </Card>
 
-      {/* New Frame Bar Component */}
       {!isLoadingVideo && videoDuration > 0 && (
         <div className="w-full max-w-4xl mt-4">
           <FrameBar
