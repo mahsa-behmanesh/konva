@@ -26,6 +26,7 @@ const FrameBar = dynamic(() => import("@/components/frame-bar"), {
 export default function VideoFrameEditor() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentFrameImage, setCurrentFrameImage] = useState<string | null>(
     null
   );
@@ -83,6 +84,18 @@ export default function VideoFrameEditor() {
   const currentFrameNumber = Math.floor(currentFrameTime * FPS);
   const totalFrames = Math.floor(videoDuration * FPS);
   const [frameThumbnails, setFrameThumbnails] = useState<string[]>([]);
+
+  // Helper function to check if a point is close to another point
+  const isPointClose = (
+    point1: Point,
+    point2: Point,
+    threshold: number = 15
+  ): boolean => {
+    const distance = Math.sqrt(
+      Math.pow(point1.x - point2.x, 2) + Math.pow(point1.y - point2.y, 2)
+    );
+    return distance <= threshold;
+  };
 
   const addFrameShapeSnapshot = useCallback(
     (shapes: ShapeData[]) => {
@@ -313,11 +326,12 @@ export default function VideoFrameEditor() {
     video.currentTime = originalTime;
     video.pause();
     console.log("Thumbnails generation complete. Total:", thumbnails.length);
-  }, [videoDuration]);
+  }, [videoDuration, totalFrames]);
 
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleVideoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setIsLoadingVideo(true);
     const file = event.target.files?.[0];
     if (file) {
       const newURL = URL.createObjectURL(file);
@@ -329,7 +343,12 @@ export default function VideoFrameEditor() {
       setFrameThumbnails([]);
       setFrameDrawingHistory(new Map());
       setCurrentFrameShapes([]);
+      setIsLoadingVideo(false);
     }
+  };
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
   };
 
   useEffect(() => {
@@ -505,15 +524,40 @@ export default function VideoFrameEditor() {
       const newPoint: Point = { x: pointerPosition.x, y: pointerPosition.y };
 
       if (drawingTool === "polygon") {
-        const newPoints = [...activePolygonPoints, newPoint];
-        const newHistory = activePolygonHistory.slice(
-          0,
-          activePolygonHistoryIndex + 1
-        );
-        newHistory.push(newPoints);
-        setActivePolygonHistory(newHistory);
-        setActivePolygonHistoryIndex(newHistory.length - 1);
-        setActivePolygonPoints(newPoints);
+        // Check if clicking on the first point to close polygon
+        if (
+          activePolygonPoints.length >= 3 &&
+          isPointClose(newPoint, activePolygonPoints[0])
+        ) {
+          // Close the polygon
+          const closedPolygon: PolygonShape = {
+            id: uuidv4(),
+            type: "polygon",
+            points: [...activePolygonPoints],
+            isClosed: true,
+            label: defaultShapeLabel,
+            color: defaultShapeColor,
+          };
+          setCurrentFrameShapes((prevShapes) => {
+            const updatedShapes = [...prevShapes, closedPolygon];
+            addFrameShapeSnapshot(updatedShapes);
+            return updatedShapes;
+          });
+          setActivePolygonPoints([]);
+          setActivePolygonHistory([[]]);
+          setActivePolygonHistoryIndex(0);
+        } else {
+          // Add new point
+          const newPoints = [...activePolygonPoints, newPoint];
+          const newHistory = activePolygonHistory.slice(
+            0,
+            activePolygonHistoryIndex + 1
+          );
+          newHistory.push(newPoints);
+          setActivePolygonHistory(newHistory);
+          setActivePolygonHistoryIndex(newHistory.length - 1);
+          setActivePolygonPoints(newPoints);
+        }
       } else if (drawingTool === "rectangle" || drawingTool === "circle") {
         if (!tempShapeStartPoint) {
           setTempShapeStartPoint(newPoint);
@@ -562,6 +606,7 @@ export default function VideoFrameEditor() {
         }
       }
     } else if (toolMode === "select") {
+      // If clicking on the stage (not on a shape), deselect
       if (e.target === e.target.getStage()) {
         setSelectedShapeId(null);
       }
@@ -1063,15 +1108,31 @@ export default function VideoFrameEditor() {
           </p>
         </CardHeader>
         <CardContent className="space-y-6">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            onChange={handleVideoUpload}
+            className="hidden"
+          />
+
           <div className="space-y-2">
-            <Label htmlFor="video-upload">Upload Video</Label>
-            <Input
-              id="video-upload"
-              type="file"
-              accept="video/*"
-              onChange={handleVideoUpload}
-              className="w-full"
-            />
+            <Label>Upload Video</Label>
+            <div
+              onClick={handleUploadClick}
+              className="w-full h-32 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center cursor-pointer hover:border-gray-400 hover:bg-gray-50 transition-colors"
+            >
+              <div className="text-center">
+                <p className="text-gray-600 text-lg mb-2">
+                  Click to upload a video
+                </p>
+                <p className="text-gray-500 text-sm">
+                  {videoFileURL
+                    ? "Video uploaded - click to change"
+                    : "Please upload a video"}
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col items-center space-y-4">
