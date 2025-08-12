@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { VideoCanvas } from "@/components/video-canvas";
 import type { ShapeData, Point, Shape } from "@/types/drawing"; // Declare Shape here
 import { v4 as uuidv4 } from "uuid";
-import { difference } from "next/dist/build/utils";
 
 export default function VideoFrameEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);

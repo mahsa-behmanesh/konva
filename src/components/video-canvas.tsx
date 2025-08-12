@@ -24,9 +24,16 @@ interface VideoCanvasProps {
   onShapeComplete: (shape: ShapeData) => void;
   onShapeSelect: (shapeId: string | null) => void;
   onShapeUpdate: (shapeId: string, updates: Partial<ShapeData>) => void;
-  onActivePolygonUpdate: (points: Point[]) => void; // This now takes the new points and commits to history in parent
+  onActivePolygonUpdate: (points: Point[]) => void;
   onTempShapeUpdate: (start: Point | null, current: Point | null) => void;
-  onCommitChanges: () => void; // New prop for committing changes
+  onCommitChanges: () => void;
+}
+
+type DragMode = "shape" | "point" | "resize";
+interface DragState {
+  mode: DragMode;
+  pointIndex?: number; // For point dragging
+  resizeHandle?: "nw" | "ne" | "sw" | "se" | "n" | "s" | "e" | "w"; // For resize handles
 }
 
 export function VideoCanvas({
@@ -48,9 +55,9 @@ export function VideoCanvas({
   onShapeComplete,
   onShapeSelect,
   onShapeUpdate,
-  onActivePolygonUpdate, // This is now the function that updates parent's state and commits to history
+  onActivePolygonUpdate,
   onTempShapeUpdate,
-  onCommitChanges, // Destructure new prop
+  onCommitChanges,
 }: VideoCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -60,7 +67,8 @@ export function VideoCanvas({
   });
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [lastMousePos, setLastMousePos] = useState<Point | null>(null); // New state for tracking last mouse position during drag
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [lastMousePos, setLastMousePos] = useState<Point | null>(null);
 
   // Update container size
   useEffect(() => {
@@ -175,6 +183,88 @@ export function VideoCanvas({
     []
   );
 
+  const findControlPoint = useCallback(
+    (
+      mousePos: Point,
+      shape: ShapeData
+    ): {
+      mode: DragMode;
+      pointIndex?: number;
+      resizeHandle?: string;
+    } | null => {
+      if (shape.type === "polygon") {
+        // Check if clicking on a polygon point
+        for (let i = 0; i < shape.points.length; i++) {
+          const canvasPoint = videoToCanvas(
+            shape.points[i].x,
+            shape.points[i].y
+          );
+          if (isPointNear(mousePos, canvasPoint, 8)) {
+            return { mode: "point", pointIndex: i };
+          }
+        }
+      } else if (shape.type === "rectangle") {
+        // Check resize handles for rectangle
+        const topLeft = videoToCanvas(shape.x, shape.y);
+        const topRight = videoToCanvas(shape.x + shape.width, shape.y);
+        const bottomLeft = videoToCanvas(shape.x, shape.y + shape.height);
+        const bottomRight = videoToCanvas(
+          shape.x + shape.width,
+          shape.y + shape.height
+        );
+        const topCenter = videoToCanvas(shape.x + shape.width / 2, shape.y);
+        const bottomCenter = videoToCanvas(
+          shape.x + shape.width / 2,
+          shape.y + shape.height
+        );
+        const leftCenter = videoToCanvas(shape.x, shape.y + shape.height / 2);
+        const rightCenter = videoToCanvas(
+          shape.x + shape.width,
+          shape.y + shape.height / 2
+        );
+
+        if (isPointNear(mousePos, topLeft, 8))
+          return { mode: "resize", resizeHandle: "nw" };
+        if (isPointNear(mousePos, topRight, 8))
+          return { mode: "resize", resizeHandle: "ne" };
+        if (isPointNear(mousePos, bottomLeft, 8))
+          return { mode: "resize", resizeHandle: "sw" };
+        if (isPointNear(mousePos, bottomRight, 8))
+          return { mode: "resize", resizeHandle: "se" };
+        if (isPointNear(mousePos, topCenter, 8))
+          return { mode: "resize", resizeHandle: "n" };
+        if (isPointNear(mousePos, bottomCenter, 8))
+          return { mode: "resize", resizeHandle: "s" };
+        if (isPointNear(mousePos, leftCenter, 8))
+          return { mode: "resize", resizeHandle: "w" };
+        if (isPointNear(mousePos, rightCenter, 8))
+          return { mode: "resize", resizeHandle: "e" };
+      } else if (shape.type === "circle") {
+        // Check resize handles for circle (4 cardinal directions)
+        const center = videoToCanvas(shape.x, shape.y);
+        const { width } = getVideoDisplayDimensions();
+        const canvasRadius = (shape.radius / videoSize.width) * width;
+
+        const north = { x: center.x, y: center.y - canvasRadius };
+        const south = { x: center.x, y: center.y + canvasRadius };
+        const east = { x: center.x + canvasRadius, y: center.y };
+        const west = { x: center.x - canvasRadius, y: center.y };
+
+        if (isPointNear(mousePos, north, 8))
+          return { mode: "resize", resizeHandle: "n" };
+        if (isPointNear(mousePos, south, 8))
+          return { mode: "resize", resizeHandle: "s" };
+        if (isPointNear(mousePos, east, 8))
+          return { mode: "resize", resizeHandle: "e" };
+        if (isPointNear(mousePos, west, 8))
+          return { mode: "resize", resizeHandle: "w" };
+      }
+
+      return null;
+    },
+    [videoToCanvas, isPointNear, getVideoDisplayDimensions, videoSize.width]
+  );
+
   // Find shape at point
   const findShapeAtPoint = useCallback(
     (point: Point): string | null => {
@@ -238,19 +328,35 @@ export function VideoCanvas({
       const videoPos = canvasToVideo(mousePos.x, mousePos.y);
 
       if (toolMode === "select") {
+        if (selectedShapeId) {
+          const selectedShape = currentFrameShapes.find(
+            (s) => s.id === selectedShapeId
+          );
+          if (selectedShape) {
+            const controlPoint = findControlPoint(mousePos, selectedShape);
+            if (controlPoint) {
+              setIsDragging(true);
+              //@ts-expect-error ok .
+              setDragState(controlPoint);
+              setLastMousePos(videoPos);
+              return;
+            }
+          }
+        }
+
         const shapeId = findShapeAtPoint(mousePos);
         if (shapeId !== selectedShapeId) {
           onShapeSelect(shapeId);
-          onCommitChanges(); // Commit when selection changes (e.g., clicking empty space to deselect)
+          onCommitChanges();
         } else if (shapeId === null && selectedShapeId !== null) {
-          // Clicking empty space to deselect
           onShapeSelect(null);
           onCommitChanges();
         }
 
         if (shapeId) {
           setIsDragging(true);
-          setLastMousePos(videoPos); // Store the video coordinates of the mouse when drag starts
+          setDragState({ mode: "shape" });
+          setLastMousePos(videoPos);
         }
       } else if (toolMode === "draw") {
         if (drawingTool === "polygon") {
@@ -271,14 +377,14 @@ export function VideoCanvas({
                 color: defaultShapeColor,
               };
               onShapeComplete(newShape);
-              onActivePolygonUpdate([]); // Clear active polygon points and reset its history
+              onActivePolygonUpdate([]);
               return;
             }
           }
 
           // Add point to polygon
           const newPoints = [...activePolygonPoints, videoPos];
-          onActivePolygonUpdate(newPoints); // Update active polygon points and commit to its history
+          onActivePolygonUpdate(newPoints);
         } else {
           // Start rectangle or circle
           onTempShapeUpdate(videoPos, videoPos);
@@ -291,9 +397,11 @@ export function VideoCanvas({
       drawingTool,
       getMousePos,
       canvasToVideo,
+      selectedShapeId,
+      currentFrameShapes,
+      findControlPoint,
       findShapeAtPoint,
       onShapeSelect,
-      selectedShapeId,
       onCommitChanges,
       activePolygonPoints,
       videoToCanvas,
@@ -301,7 +409,7 @@ export function VideoCanvas({
       defaultShapeLabel,
       defaultShapeColor,
       onShapeComplete,
-      onActivePolygonUpdate, // Now used for updating and committing active polygon points
+      onActivePolygonUpdate,
       onTempShapeUpdate,
     ]
   );
@@ -314,25 +422,81 @@ export function VideoCanvas({
       const mousePos = getMousePos(e);
       const videoPos = canvasToVideo(mousePos.x, mousePos.y);
 
-      if (isDragging && selectedShapeId && lastMousePos) {
+      if (isDragging && selectedShapeId && lastMousePos && dragState) {
         const shape = currentFrameShapes.find((s) => s.id === selectedShapeId);
         if (shape) {
           const deltaX = videoPos.x - lastMousePos.x;
           const deltaY = videoPos.y - lastMousePos.y;
 
-          if (shape.type === "rectangle" || shape.type === "circle") {
-            onShapeUpdate(selectedShapeId, {
-              x: shape.x + deltaX,
-              y: shape.y + deltaY,
-            });
-          } else if (shape.type === "polygon") {
-            const newPoints = shape.points.map((p) => ({
-              x: p.x + deltaX,
-              y: p.y + deltaY,
-            }));
+          if (dragState.mode === "shape") {
+            // Move entire shape
+            if (shape.type === "rectangle" || shape.type === "circle") {
+              onShapeUpdate(selectedShapeId, {
+                x: shape.x + deltaX,
+                y: shape.y + deltaY,
+              });
+            } else if (shape.type === "polygon") {
+              const newPoints = shape.points.map((p) => ({
+                x: p.x + deltaX,
+                y: p.y + deltaY,
+              }));
+              onShapeUpdate(selectedShapeId, { points: newPoints });
+            }
+          } else if (
+            dragState.mode === "point" &&
+            shape.type === "polygon" &&
+            dragState.pointIndex !== undefined
+          ) {
+            // Move individual polygon point
+            const newPoints = [...shape.points];
+            newPoints[dragState.pointIndex] = videoPos;
             onShapeUpdate(selectedShapeId, { points: newPoints });
+          } else if (dragState.mode === "resize") {
+            // Handle resize
+            if (shape.type === "rectangle" && dragState.resizeHandle) {
+              const handle = dragState.resizeHandle;
+              let newX = shape.x,
+                newY = shape.y,
+                newWidth = shape.width,
+                newHeight = shape.height;
+
+              if (handle.includes("w")) {
+                newWidth = shape.width + (shape.x - videoPos.x);
+                newX = videoPos.x;
+              }
+              if (handle.includes("e")) {
+                newWidth = videoPos.x - shape.x;
+              }
+              if (handle.includes("n")) {
+                newHeight = shape.height + (shape.y - videoPos.y);
+                newY = videoPos.y;
+              }
+              if (handle.includes("s")) {
+                newHeight = videoPos.y - shape.y;
+              }
+
+              // Ensure minimum size
+              if (newWidth > 10 && newHeight > 10) {
+                onShapeUpdate(selectedShapeId, {
+                  x: newX,
+                  y: newY,
+                  width: newWidth,
+                  height: newHeight,
+                });
+              }
+            } else if (shape.type === "circle" && dragState.resizeHandle) {
+              // Calculate new radius based on distance from center
+              const distance = Math.sqrt(
+                Math.pow(videoPos.x - shape.x, 2) +
+                  Math.pow(videoPos.y - shape.y, 2)
+              );
+              if (distance > 5) {
+                onShapeUpdate(selectedShapeId, { radius: distance });
+              }
+            }
           }
-          setLastMousePos(videoPos); // Update last mouse position for the next move event
+
+          setLastMousePos(videoPos);
         }
       } else if (
         toolMode === "draw" &&
@@ -349,7 +513,8 @@ export function VideoCanvas({
       isDragging,
       selectedShapeId,
       currentFrameShapes,
-      lastMousePos, // Use lastMousePos here
+      lastMousePos,
+      dragState,
       onShapeUpdate,
       toolMode,
       tempShapeStart,
@@ -365,8 +530,9 @@ export function VideoCanvas({
 
       if (isDragging) {
         setIsDragging(false);
-        setLastMousePos(null); // Clear last mouse position
-        onCommitChanges(); // Commit after drag ends
+        setDragState(null);
+        setLastMousePos(null);
+        onCommitChanges();
       } else if (
         toolMode === "draw" &&
         tempShapeStart &&
@@ -422,7 +588,7 @@ export function VideoCanvas({
     [
       isPlaying,
       isDragging,
-      onCommitChanges, // Add onCommitChanges here
+      onCommitChanges,
       toolMode,
       tempShapeStart,
       tempShapeCurrent,
@@ -449,9 +615,15 @@ export function VideoCanvas({
 
     // Draw completed shapes
     currentFrameShapes.forEach((shape) => {
+      const isSelected = selectedShapeId === shape.id;
       ctx.strokeStyle = shape.color;
-      ctx.lineWidth = selectedShapeId === shape.id ? 3 : 2;
-      ctx.fillStyle = "transparent";
+      ctx.lineWidth = isSelected ? 3 : 2;
+
+      if (isSelected) {
+        ctx.fillStyle = shape.color + "40"; // Add 40 for ~25% opacity
+      } else {
+        ctx.fillStyle = "transparent";
+      }
 
       if (shape.type === "rectangle") {
         const canvasPos = videoToCanvas(shape.x, shape.y);
@@ -459,6 +631,15 @@ export function VideoCanvas({
           width: (shape.width / videoSize.width) * width,
           height: (shape.height / videoSize.height) * height,
         };
+
+        if (isSelected) {
+          ctx.fillRect(
+            canvasPos.x,
+            canvasPos.y,
+            canvasSize.width,
+            canvasSize.height
+          );
+        }
         ctx.strokeRect(
           canvasPos.x,
           canvasPos.y,
@@ -466,7 +647,47 @@ export function VideoCanvas({
           canvasSize.height
         );
 
-        if (selectedShapeId === shape.id) {
+        if (isSelected) {
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 1;
+
+          const handleSize = 6;
+          const handles = [
+            { x: canvasPos.x, y: canvasPos.y }, // nw
+            { x: canvasPos.x + canvasSize.width, y: canvasPos.y }, // ne
+            { x: canvasPos.x, y: canvasPos.y + canvasSize.height }, // sw
+            {
+              x: canvasPos.x + canvasSize.width,
+              y: canvasPos.y + canvasSize.height,
+            }, // se
+            { x: canvasPos.x + canvasSize.width / 2, y: canvasPos.y }, // n
+            {
+              x: canvasPos.x + canvasSize.width / 2,
+              y: canvasPos.y + canvasSize.height,
+            }, // s
+            { x: canvasPos.x, y: canvasPos.y + canvasSize.height / 2 }, // w
+            {
+              x: canvasPos.x + canvasSize.width,
+              y: canvasPos.y + canvasSize.height / 2,
+            }, // e
+          ];
+
+          handles.forEach((handle) => {
+            ctx.fillRect(
+              handle.x - handleSize / 2,
+              handle.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+            ctx.strokeRect(
+              handle.x - handleSize / 2,
+              handle.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+          });
+
           ctx.fillStyle = shape.color;
           ctx.font = "14px Arial";
           ctx.fillText(shape.label, canvasPos.x, canvasPos.y - 5);
@@ -476,9 +697,40 @@ export function VideoCanvas({
         const canvasRadius = (shape.radius / videoSize.width) * width;
         ctx.beginPath();
         ctx.arc(canvasPos.x, canvasPos.y, canvasRadius, 0, 2 * Math.PI);
+
+        if (isSelected) {
+          ctx.fill();
+        }
         ctx.stroke();
 
-        if (selectedShapeId === shape.id) {
+        if (isSelected) {
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 1;
+
+          const handleSize = 6;
+          const handles = [
+            { x: canvasPos.x, y: canvasPos.y - canvasRadius }, // n
+            { x: canvasPos.x, y: canvasPos.y + canvasRadius }, // s
+            { x: canvasPos.x + canvasRadius, y: canvasPos.y }, // e
+            { x: canvasPos.x - canvasRadius, y: canvasPos.y }, // w
+          ];
+
+          handles.forEach((handle) => {
+            ctx.fillRect(
+              handle.x - handleSize / 2,
+              handle.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+            ctx.strokeRect(
+              handle.x - handleSize / 2,
+              handle.y - handleSize / 2,
+              handleSize,
+              handleSize
+            );
+          });
+
           ctx.fillStyle = shape.color;
           ctx.font = "14px Arial";
           ctx.fillText(
@@ -500,11 +752,27 @@ export function VideoCanvas({
         if (shape.isClosed) {
           ctx.closePath();
         }
+
+        if (isSelected && shape.isClosed) {
+          ctx.fill();
+        }
         ctx.stroke();
 
-        if (selectedShapeId === shape.id) {
+        if (isSelected) {
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 1;
+
+          shape.points.forEach((point) => {
+            const canvasPoint = videoToCanvas(point.x, point.y);
+            ctx.beginPath();
+            ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.stroke();
+          });
+
           ctx.fillStyle = shape.color;
-          ctx.font = "20px Arial";
+          ctx.font = "14px Arial";
           ctx.fillText(shape.label, firstPoint.x, firstPoint.y - 5);
         }
       }
@@ -599,14 +867,14 @@ export function VideoCanvas({
     drawShapes();
   }, [drawShapes]);
 
-  // Update canvas size
+  // Update canvas size and redraw
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.width = containerSize.width;
-      canvas.height = containerSize.height;
-      drawShapes();
-    }
+    if (!canvas) return;
+
+    canvas.width = containerSize.width;
+    canvas.height = containerSize.height;
+    drawShapes();
   }, [containerSize, drawShapes]);
 
   const {
@@ -617,6 +885,23 @@ export function VideoCanvas({
   } = getVideoDisplayDimensions();
 
   return (
+    // <div ref={containerRef} className="relative w-full h-full bg-black">
+    //   <video
+    //     ref={videoRef}
+    //     src={videoSrc}
+    //     className="w-full h-full object-contain"
+    //     onLoadedData={onVideoLoadedData}
+    //     onTimeUpdate={onVideoTimeUpdate}
+    //     onEnded={onVideoEnded}
+    //   />
+    //   <canvas
+    //     ref={canvasRef}
+    //     className="absolute inset-0 cursor-crosshair"
+    //     onMouseDown={handleMouseDown}
+    //     onMouseMove={handleMouseMove}
+    //     onMouseUp={handleMouseUp}
+    //   />
+    // </div>
     <div
       ref={containerRef}
       className="relative w-full bg-black rounded-lg overflow-hidden"
