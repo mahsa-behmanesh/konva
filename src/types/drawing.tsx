@@ -3,34 +3,32 @@ export interface Point {
   y: number;
 }
 
-export interface PolygonShape {
-  id: string; // Unique ID for the shape
+export interface BaseShape {
+  id: string;
+  label: string;
+  color: string;
+}
+
+export interface PolygonShape extends BaseShape {
   type: "polygon";
   points: Point[];
   isClosed: boolean;
-  label: string; // New: Label for the shape
-  color: string; // New: Color for the shape
 }
 
-export interface RectangleShape {
-  id: string; // Unique ID for the shape
+export interface RectangleShape extends BaseShape {
   type: "rectangle";
   x: number;
   y: number;
   width: number;
   height: number;
-  label: string; // New: Label for the shape
-  color: string; // New: Color for the shape
 }
 
-export interface CircleShape {
-  id: string; // Unique ID for the shape
+export interface CircleShape extends BaseShape {
   type: "circle";
-  x: number; // center x
-  y: number; // center y
+  x: number;
+  y: number;
   radius: number;
-  label: string; // New: Label for the shape
-  color: string; // New: Color for the shape
 }
 
 export type ShapeData = PolygonShape | RectangleShape | CircleShape;
+export type Shape = ShapeData;
